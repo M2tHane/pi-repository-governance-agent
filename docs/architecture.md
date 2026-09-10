@@ -1,0 +1,295 @@
+# Pi Repository Governance Agent — Architecture
+
+版本：v0.1｜日期：2026-09-10
+
+> 本文描述系统架构、Agent 分层、工具与副作用边界、输出契约和技术选型。产品范围见 [PRD-MVP.md](./PRD-MVP.md)。
+
+## 1. 架构原则
+
+- Pi 是核心 Agent Framework。
+- 单个 Node.js / TypeScript 服务承载 GitHub 接入、业务规则和 Pi 执行。
+- GitHub 一级事件由确定性代码路由，不让 LLM 决定事件类型。
+- 简单任务直接执行对应业务 Agent；只有复杂任务才进入 Main Agent。
+- Agent 只获得受控、只读工具；外部副作用统一由服务端执行。
+- 当前不引入 Spring Boot、微服务、GraphDB、独立 VectorDB 或复杂工作流平台。
+
+## 2. 系统模块
+
+```mermaid
+flowchart TB
+    GH[GitHub Repository / PR]
+    UI[React 最小管理界面]
+
+    subgraph SERVICE[Pi Governance Service · Node.js / TypeScript]
+        WH[Webhook 接收与验签]
+        API[管理 API 与用户鉴权]
+        TIMER[定时触发器 · M3]
+        ROUTER[Event Dispatcher]
+        JOBS[持久任务记录与调度]
+        CONTEXT[GitHub 数据与仓库上下文准备]
+        RUNNER[Pi Job Runner]
+
+        subgraph AGENTS[Pi Agent 执行层]
+            MAIN[Governance Main Agent · M2]
+            REVIEW[PR Review Agent]
+            REPLY[Reply Handler · M2]
+            EXTRACT[Decision Extractor]
+            HEALTH[Health Auditor · M3]
+            SPECIAL[专项 SubAgent · M2 按需]
+        end
+
+        MEMORY[Memory Manager]
+        VALIDATE[结果校验 / 去重 / 权限与版本检查]
+        PUBLISH[GitHub Publisher]
+        REPORT[结果与审计保存]
+    end
+
+    DB[(PostgreSQL)]
+    WS[按 Job 隔离的只读仓库工作区]
+    LLM[模型服务]
+
+    GH -->|Webhook| WH
+    UI --> API
+    WH --> ROUTER
+    API --> JOBS
+    API --> MEMORY
+    TIMER --> JOBS
+    ROUTER --> JOBS
+    JOBS <--> DB
+    JOBS --> CONTEXT
+    CONTEXT -->|读取 PR / 评论 / 提交| GH
+    CONTEXT --> WS
+    CONTEXT --> RUNNER
+    RUNNER --> REVIEW
+    RUNNER --> REPLY
+    RUNNER --> EXTRACT
+    RUNNER --> HEALTH
+    RUNNER --> MAIN
+    MAIN --> REVIEW
+    MAIN --> HEALTH
+    REVIEW -. 按需委派 .-> SPECIAL
+    AGENTS -->|受限只读工具| WS
+    AGENTS <--> MEMORY
+    AGENTS <--> LLM
+    AGENTS --> VALIDATE
+    VALIDATE -->|Review / 回复| PUBLISH
+    VALIDATE -->|候选决策| MEMORY
+    VALIDATE -->|报告 / 审计| REPORT
+    REPORT --> DB
+    PUBLISH --> GH
+```
+
+M0/M1 仅实现对应阶段所需节点；模块数量不等于部署单元数量。
+
+## 3. Agent 层级
+
+```mermaid
+flowchart TD
+    R[代码事件路由] --> D[简单任务：直接执行对应 Agent]
+    R --> M[复杂任务：Governance Main Agent]
+    M --> P[PR Review Agent]
+    M --> H[Health Auditor]
+    D --> P
+    D --> Q[Reply Handler]
+    D --> E[Decision Extractor]
+    D --> H
+    P -. 按需委派 .-> J[Java Reviewer]
+    P -. 按需委派 .-> S[Security Reviewer]
+    P -. 按需委派 .-> A[Architecture Reviewer]
+    P -. 按需委派 .-> K[Memory Conflict Reviewer]
+    J --> G[PR Review 汇总与复核]
+    S --> G
+    A --> G
+    K --> G
+```
+
+### 3.1 核心角色
+
+| 角色 | 输入 | 核心职责 | 结构化输出 | 权限边界 |
+| --- | --- | --- | --- | --- |
+| Governance Main Agent | 已确定任务类型、上下文索引、预算、可用角色 | 拆解复杂任务、委派、处理缺失结果、综合结论 | 子任务与总体结果、完成范围、局限 | 只读工具 + 受限 delegate_agent |
+| PR Review Agent | PR 快照、源码、历史意见、ACTIVE Memory | 判断变更影响、审查、汇总专项发现 | ReviewResult | 只读仓库和 Memory；不直接发布 |
+| Reply Handler | App 线程、人类回复、当前代码、原 finding | 验证解释、纠正误判、更新判断 | ReplyResult、决策线索 | 只读；不能激活规则或修改代码 |
+| Decision Extractor | 已合并 PR、最终代码、讨论、现有 Memory | 提取可复用决策、分类、定作用域、识别冲突 | DecisionProposal[] | 只能提交候选；不能直接激活 |
+| Health Auditor | 固定快照、规则、CI / 测试 / 扫描数据 | 发现仓库层面问题与趋势 | HealthReport | 只读；不修复、不清理 |
+
+Repository Curator 仅保留在长期构想，不属于当前实现。
+
+## 4. Main Agent 何时出现
+
+一级路由由代码根据 GitHub 事件和 action 确定。
+
+简单任务：
+
+- PR Review → PR Review Agent。
+- PR Merge → Decision Extractor。
+- Review Thread Reply → Reply Handler（M2）。
+- 定时健康检查 → Health Auditor（M3）。
+
+只有任务需要多个专项独立分析、交叉核实或跨维度汇总时，才进入 Governance Main Agent。
+
+Main Agent 不负责：
+
+- Webhook 验签。
+- 定时调度。
+- 任务持久化。
+- GitHub 权限判断。
+- 重试与幂等。
+- Memory 生效。
+
+PR Review Agent 自己负责审查结果汇总，不再额外创建只负责转述的 Aggregator Agent。
+
+## 5. 专项 SubAgent
+
+M1 不要求每个 PR 固定运行全部专项 Agent，而是由单个 PR Review Agent 加载相关 Skills。
+
+M2 在实际任务复杂度证明有价值后，才拆为独立会话：
+
+| 专项角色 | 关注范围 | 独立会话条件 |
+| --- | --- | --- |
+| Java Reviewer | Java 语义、异常与资源管理、并发、框架使用 | Java 变更复杂或需要独立上下文 |
+| Security Reviewer | 权限、敏感信息、输入处理、攻击面 | 涉及登录、权限、数据出口等安全边界 |
+| Architecture Reviewer | 模块边界、依赖方向、架构规则 | 跨模块改动或命中架构决策 |
+| Memory Conflict Reviewer | 规则适用性、例外、历史替代关系 | 存在多条可能冲突的团队规则 |
+
+定义：
+
+- **Skill**：审查方法与领域知识。
+- **Tool**：受控的可执行能力。
+- **Agent**：承担任务并持有上下文的执行角色。
+
+增加审查方法，不等于必须增加 Agent。
+
+## 6. Pi 承载方式
+
+项目默认使用独立 AgentSession 实现角色间上下文隔离，必要时再使用独立进程。
+
+注意：独立 Session 或进程不等于安全沙箱。
+
+delegate_agent 约束：
+
+- 仅允许服务注册的角色。
+- 子任务继承当前 Job 的仓库和工作区。
+- 不允许模型指定其他仓库、任意文件系统路径、凭据或更高权限。
+- 子任务共享父任务总预算。
+- 支持超时、并发限制和取消传播。
+- 最多两层委派：Main → 业务 Agent → 专项 Agent。
+- 子 Agent 失败时可返回部分结果，但汇总必须说明缺失维度。
+
+## 7. 工具与副作用边界
+
+| 能力 | 实施方式 | 是否暴露给分析 Agent |
+| --- | --- | --- |
+| read / grep / find / ls | 绑定当前工作区的受限文件工具 | 是 |
+| git_diff / git_log / git_blame | 服务端白名单命令，只读且绑定固定仓库 | 是 |
+| github_get_pr / get_diff / get_thread | 绑定 Job 仓库的 GitHub 读取适配器 | 按角色开放 |
+| memory_search / memory_get | 自动附加团队、仓库和状态过滤 | 是 |
+| memory_propose | 结果处理器验证后保存 DecisionProposal | 否 |
+| delegate_agent | 白名单角色、继承 Job 范围和预算 | M2 按需 |
+| Git clone / fetch / checkout | 服务端准备工作区 | 否 |
+| github_create_review / reply_comment | Publisher 校验后执行 | 否 |
+| memory_activate / supersede / deprecate | 管理 API 权限校验后执行 | 否 |
+| edit / write / git_push / create_pr | 当前阶段不提供 | 否 |
+
+源码只读不意味着系统无写操作；GitHub 评论、任务记录和候选 Memory 均属于服务端受控副作用。
+
+## 8. 输出契约
+
+### 8.1 ReviewResult
+
+至少包含：
+
+- `job_id`
+- `repository_id`
+- `pr_number`
+- `base_sha`
+- `head_sha`
+- `summary`
+- `coverage`
+- `findings`
+- `limitations`
+
+每条 finding 至少包含：
+
+- 稳定标识 / 去重指纹。
+- 类别和严重度。
+- `path`、`line`、`side`；不能映射至 diff 时使用摘要位置。
+- 问题说明、触发条件、影响和建议。
+- 代码证据。
+- 可选 Memory ID、版本和来源。
+- 证据充分程度。
+- 需要人工确认的事项。
+
+### 8.2 ReplyResult
+
+包含：
+
+- 对应 finding / thread。
+- 复核结论。
+- 证据。
+- 建议状态。
+- 决策线索。
+
+### 8.3 DecisionProposal
+
+包含 [memory-design.md](./memory-design.md) 定义的 Memory 核心字段和来源证据。
+
+### 8.4 HealthReport
+
+包含：
+
+- 仓库固定快照。
+- 数据时间窗口。
+- 各维度 findings。
+- 缺失数据。
+- limitations。
+
+## 9. 结果校验
+
+服务端必须在发布或写入前校验：
+
+- 结构合法性。
+- 字段完整性。
+- repository / PR / Memory 资源归属。
+- diff 行位置。
+- Memory 状态和版本。
+- 重复 finding。
+- 最低证据要求。
+
+格式校验失败可允许一次有限格式修复；仍失败则任务失败，不直接发布原始模型文本。
+
+结构合法不代表判断正确；内容质量由人工标注样本评估。
+
+## 10. 技术选型
+
+| 层 | 初期选择 | 扩展条件 |
+| --- | --- | --- |
+| Runtime | Node.js + TypeScript | 固定受支持版本和锁文件 |
+| Agent | Pi Agent SDK、AgentSession、自定义 Tools / Skills | M2 加入 delegate_agent 与专项会话 |
+| GitHub | GitHub App + Octokit | 线程详情需要时补 GraphQL |
+| HTTP | Node HTTP 或轻量 HTTP 框架 | 按 Webhook / 管理 API 需求确定 |
+| Job | M0 内存；M1 PostgreSQL + 单实例后台执行 | 多 Worker 后再考虑 BullMQ + Redis |
+| Memory | PostgreSQL + 作用域过滤 + 文本检索 | 召回不足时加 pgvector |
+| Workspace | Git 固定提交快照、Agent 只读 | 运行不可信代码时才引入沙箱 |
+| Frontend | React 最小管理界面 | M2/M3 随功能扩展 |
+| 部署 | 单 Node 服务 + PostgreSQL | 吞吐 / 隔离需求出现后拆 Worker |
+
+## 11. 阶段性架构门槛
+
+### M0
+
+GitHub App → Webhook → Event Dispatcher → Pi PR Review Agent → GitHub COMMENT Review。
+
+要求：验签、最小权限、固定代码快照、显式只读工具。
+
+### M1
+
+补齐：Decision Extractor、Memory Manager、最小管理界面、持久任务处理、结果校验、去重和恢复。
+
+### M2
+
+补齐：Reply Handler、Main Agent、delegate_agent、专项 Agent、预算与取消传播。
+
+### M3
+
+补齐：Health Auditor、定时 / 手动触发、健康报告与趋势。
