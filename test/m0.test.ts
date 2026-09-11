@@ -8,16 +8,19 @@ import { promisify } from "node:util";
 import test from "node:test";
 import { createApp } from "../src/app.js";
 import { loadConfig, type Config } from "../src/config.js";
-import { GitHubClient } from "../src/github.js";
+import { GitHubApiError, GitHubClient } from "../src/github.js";
 import { JobQueue } from "../src/queue.js";
 import { parseReviewResult } from "../src/review.js";
 import type { ReviewJob } from "../src/types.js";
 import { readWorkspaceFile, withWorkspace } from "../src/workspace.js";
+import { validateMemoryReferences } from "../src/service.js";
+import type { MemoryRecord } from "../src/types.js";
 
 const exec = promisify(execFile);
 
 const config: Config = {
   appId: "1", privateKey: "unused", webhookSecret: "secret", allowedRepositories: new Set(["owner/repo"]),
+  databaseUrl: "postgresql://postgres:postgres@localhost/test",
   modelProvider: "test", modelName: "test", modelApiKey: "test", port: 0, webhookMaxBytes: 10_000, queueCapacity: 2, agentTimeoutMs: 100,
 };
 
@@ -74,6 +77,18 @@ test("webhook 不等待后台任务", async () => {
   assert(performance.now() - started < 1_000);
   release();
   await new Promise<void>((resolve) => server.close(() => resolve()));
+});
+
+test("持久层失败时 webhook 返回 503", async () => {
+  const { server } = createApp(config, { accept: async () => { throw new Error("database unavailable"); } });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert(address && typeof address === "object");
+  const body = JSON.stringify(payload);
+  try {
+    const response = await fetch(`http://127.0.0.1:${address.port}/github/webhook`, { method: "POST", headers: { "x-github-event": "pull_request", "x-github-delivery": "database-down", "x-hub-signature-256": signature(body) }, body });
+    assert.equal(response.status, 503);
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
 
 function job(deliveryId: string, headSha = deliveryId): Omit<ReviewJob, "id" | "status"> {
@@ -164,7 +179,7 @@ test("配置缺失或格式错误时明确失败", async () => {
   try {
     const key = join(root, "key.pem");
     await writeFile(key, "key");
-    const env = { GITHUB_APP_ID: "1", GITHUB_PRIVATE_KEY_PATH: key, GITHUB_WEBHOOK_SECRET: "secret", GITHUB_ALLOWED_REPOSITORIES: "owner/repo", MODEL_PROVIDER: "provider", MODEL_NAME: "model", MODEL_API_KEY: "api", PORT: "3000" };
+    const env = { GITHUB_APP_ID: "1", GITHUB_PRIVATE_KEY_PATH: key, GITHUB_WEBHOOK_SECRET: "secret", GITHUB_ALLOWED_REPOSITORIES: "owner/repo", DATABASE_URL: "postgresql://localhost/test", MODEL_PROVIDER: "provider", MODEL_NAME: "model", MODEL_API_KEY: "api", PORT: "3000" };
     assert.equal(loadConfig(env).port, 3000);
     assert.throws(() => loadConfig({ ...env, PORT: "invalid" }), /PORT/);
     assert.throws(() => loadConfig({ ...env, MODEL_API_KEY: "" }), /MODEL_API_KEY/);
@@ -175,6 +190,15 @@ test("ReviewResult 只接受约定结构和有限输出", () => {
   assert.equal(parseReviewResult('{"summary":"ok","findings":[],"coverage":["diff"],"limitations":[]}').summary, "ok");
   assert.throws(() => parseReviewResult('{"summary":"raw"}'), /结构无效/);
   assert.throws(() => parseReviewResult("x".repeat(50_001)), /超过预算/);
+});
+
+test("模型不能引用未召回或跨仓库 Memory", () => {
+  const memory = { id: "memory", version: 1, repositoryId: 2, installationId: 1, type: "engineering_rule", title: "rule", content: "content", rationale: "reason", scope: {}, source: { pullRequestNumber: 1, commitSha: "sha", commentIds: [1] }, evidence: [], confidence: 1, uncertainties: [], status: "ACTIVE", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } satisfies MemoryRecord;
+  const result: import("../src/types.js").ReviewResult = { summary: "", coverage: [], limitations: [], findings: [{ description: "issue", evidence: "code", impact: "impact", memory: { id: "memory", version: 1, source: {} } }] };
+  validateMemoryReferences(result, [memory], 2);
+  assert.equal(result.findings[0]?.memory?.source.pullRequestNumber, 1);
+  assert.throws(() => validateMemoryReferences({ ...result, findings: [{ ...result.findings[0]!, memory: { id: "invented", version: 1, source: {} } }] }, [memory], 2), /未召回/);
+  assert.throws(() => validateMemoryReferences(result, [memory], 3), /无效/);
 });
 
 test("GitHub Publisher 固定 COMMENT 和 commit_id", async () => {
@@ -189,4 +213,13 @@ test("GitHub Publisher 固定 COMMENT 和 commit_id", async () => {
     globalThis.fetch = async () => new Response(JSON.stringify({ message: "Resource not accessible by integration" }), { status: 403 });
     await assert.rejects(client.createReview("token", { ...job("denied", "head"), id: "job", status: "running" }, "body"), /403/);
   } finally { globalThis.fetch = original; }
+});
+
+test("GitHub API 保留 Retry-After", async () => {
+  const keys = generateKeyPairSync("rsa", { modulusLength: 2048, privateKeyEncoding: { type: "pkcs8", format: "pem" }, publicKeyEncoding: { type: "spki", format: "pem" } });
+  const client = new GitHubClient("1", keys.privateKey);
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => new Response("{}", { status: 429, headers: { "retry-after": "17" } });
+  try { await assert.rejects(client.getUser("token"), (error: unknown) => error instanceof GitHubApiError && error.retryAfterSeconds === 17); }
+  finally { globalThis.fetch = original; }
 });

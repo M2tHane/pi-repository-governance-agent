@@ -1,0 +1,37 @@
+import type { Database } from "./database.js";
+import type { ReviewJob } from "./types.js";
+
+export class PersistentRunner {
+  private stopped = false;
+  private timer?: NodeJS.Timeout;
+
+  constructor(private database: Database, private execute: (job: ReviewJob) => Promise<void>, private pollMs = 500) {}
+
+  async start() {
+    const recovered = await this.database.recoverRunning();
+    if (recovered) console.info(JSON.stringify({ event: "jobs_recovered", count: recovered }));
+    void this.tick();
+  }
+
+  stop() { this.stopped = true; if (this.timer) clearTimeout(this.timer); }
+
+  private async tick() {
+    if (this.stopped) return;
+    try {
+      const job = await this.database.claimNext();
+      if (job) {
+        try { await this.execute(job); await this.database.finishJob(job); }
+        catch (error) {
+          const failure = error instanceof Error ? error : new Error("未知错误");
+          await this.database.failJob(job, failure, transient(failure));
+          console.error(JSON.stringify({ event: "job_failed", jobId: job.id, deliveryId: job.deliveryId, repositoryId: job.repositoryId, prNumber: job.prNumber, headSha: job.headSha, status: job.status, error: failure.message }));
+        }
+      }
+    } catch (error) { console.error(JSON.stringify({ event: "runner_error", error: error instanceof Error ? error.message : "未知错误" })); }
+    finally { if (!this.stopped) this.timer = setTimeout(() => void this.tick(), this.pollMs); }
+  }
+}
+
+export function transient(error: Error) {
+  return /\b429\b|\b5\d\d\b|fetch failed|network|ECONN|ETIMEDOUT|超时/i.test(error.message);
+}

@@ -5,6 +5,7 @@ export interface Config {
   privateKey: string;
   webhookSecret: string;
   allowedRepositories: Set<string>;
+  databaseUrl: string;
   modelProvider: string;
   modelName: string;
   modelApiKey: string;
@@ -12,6 +13,10 @@ export interface Config {
   webhookMaxBytes: number;
   queueCapacity: number;
   agentTimeoutMs: number;
+  githubClientId?: string;
+  githubClientSecret?: string;
+  githubOAuthCallbackUrl?: string;
+  sessionSecret?: string;
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -37,6 +42,7 @@ export function loadConfig(env = process.env): Config {
     privateKey,
     webhookSecret: required(env, "GITHUB_WEBHOOK_SECRET"),
     allowedRepositories: new Set(repositories),
+    databaseUrl: required(env, "DATABASE_URL"),
     modelProvider: required(env, "MODEL_PROVIDER"),
     modelName: required(env, "MODEL_NAME"),
     modelApiKey: required(env, "MODEL_API_KEY"),
@@ -44,5 +50,9 @@ export function loadConfig(env = process.env): Config {
     webhookMaxBytes: positiveInt(env, "WEBHOOK_MAX_BYTES", 1_048_576),
     queueCapacity: positiveInt(env, "QUEUE_CAPACITY", 20),
     agentTimeoutMs: positiveInt(env, "AGENT_TIMEOUT_MS", 300_000),
+    githubClientId: env.GITHUB_CLIENT_ID?.trim() || undefined,
+    githubClientSecret: env.GITHUB_CLIENT_SECRET?.trim() || undefined,
+    githubOAuthCallbackUrl: env.GITHUB_OAUTH_CALLBACK_URL?.trim() || undefined,
+    sessionSecret: env.SESSION_SECRET?.trim() || undefined,
   };
 }
