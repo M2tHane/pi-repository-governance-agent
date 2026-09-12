@@ -1,8 +1,10 @@
 # Pi Repository Governance Agent — Architecture
 
-版本：v0.1｜日期：2026-09-10
+版本：v0.2｜日期：2026-09-11
 
 > 本文描述系统架构、Agent 分层、工具与副作用边界、输出契约和技术选型。产品范围见 [PRD-MVP.md](./PRD-MVP.md)。
+
+当前 M2 沿用一个 Node 服务、一个 PostgreSQL Worker 和固定 SHA Workspace。真实验收状态见 [M2](./tasks/M2.md)，取舍见 [M2 Note](../.agents/notes/proposed/architecture/2026-09-11-m2-reply-and-multi-agent.md)。图中的 M3 节点仅表示后续范围。
 
 ## 1. 架构原则
 
@@ -87,17 +89,16 @@ M0/M1 仅实现对应阶段所需节点；模块数量不等于部署单元数�
 flowchart TD
     R[代码事件路由] --> D[简单任务：直接执行对应 Agent]
     R --> M[复杂任务：Governance Main Agent]
-    M --> P[PR Review Agent]
-    M --> H[Health Auditor]
-    D --> P
+    D --> P[PR Review Agent]
     D --> Q[Reply Handler]
     D --> E[Decision Extractor]
-    D --> H
-    P -. 按需委派 .-> J[Java Reviewer]
-    P -. 按需委派 .-> S[Security Reviewer]
-    P -. 按需委派 .-> A[Architecture Reviewer]
-    P -. 按需委派 .-> K[Memory Conflict Reviewer]
-    J --> G[PR Review 汇总与复核]
+    M -. 按需委派 .-> P
+    M -. 按需委派 .-> J[Java Reviewer]
+    M -. 按需委派 .-> S[Security Reviewer]
+    M -. 按需委派 .-> A[Architecture Reviewer]
+    M -. 按需委派 .-> K[Memory Conflict Reviewer]
+    P --> G[Main 候选分组 + 服务端校验]
+    J --> G
     S --> G
     A --> G
     K --> G
@@ -141,7 +142,7 @@ PR Review Agent 自己负责审查结果汇总，不再额外创建只负责转�
 
 ## 5. 专项 SubAgent
 
-M1 不要求每个 PR 固定运行全部专项 Agent，而是由单个 PR Review Agent 加载相关 Skills。
+M1 使用单个 PR Review Agent。M2 的独立角色复用只读文件工具，不加载待审仓库 Skills。
 
 M2 在实际任务复杂度证明有价值后，才拆为独立会话：
 
@@ -173,19 +174,21 @@ delegate_agent 约束：
 - 不允许模型指定其他仓库、任意文件系统路径、凭据或更高权限。
 - 子任务共享父任务总预算。
 - 支持超时、并发限制和取消传播。
-- 最多两层委派：Main → 业务 Agent → 专项 Agent。
+- 当前固定一层：Main → reviewer；child 不再 delegate，同时最多两项。
 - 子 Agent 失败时可返回部分结果，但汇总必须说明缺失维度。
+
+Main 不重复完整审查，最终返回 summary 与候选 key 分组。服务验证每个候选恰好出现一次、Memory 约束不被混合，再合并原始证据。Main 失败时仅可明确汇总已校验 child，并记录 partial/fallback。
 
 ## 7. 工具与副作用边界
 
 | 能力 | 实施方式 | 是否暴露给分析 Agent |
 | --- | --- | --- |
-| read / grep / find / ls | 绑定当前工作区的受限文件工具 | 是 |
-| git_diff / git_log / git_blame | 服务端白名单命令，只读且绑定固定仓库 | 是 |
-| github_get_pr / get_diff / get_thread | 绑定 Job 仓库的 GitHub 读取适配器 | 按角色开放 |
-| memory_search / memory_get | 自动附加团队、仓库和状态过滤 | 是 |
+| read_file / search_text | 绑定当前 Workspace 的只读文件工具 | Review / Reply / Specialist |
+| git_diff / git_log / git_blame | 有真实需要后再实现 | 当前未注册 |
+| PR / diff / thread 读取 | 服务准备绑定 Job 的上下文 | 通过输入上下文提供 |
+| Memory 检索 | 服务端附加仓库、Scope 和状态过滤 | 通过输入上下文提供 |
 | memory_propose | 结果处理器验证后保存 DecisionProposal | 否 |
-| delegate_agent | 白名单角色、继承 Job 范围和预算 | M2 按需 |
+| delegate_agent | 白名单角色、继承 Job 范围和预算 | 仅 Main |
 | Git clone / fetch / checkout | 服务端准备工作区 | 否 |
 | github_create_review / reply_comment | Publisher 校验后执行 | 否 |
 | memory_activate / supersede / deprecate | 管理 API 权限校验后执行 | 否 |
@@ -196,6 +199,8 @@ delegate_agent 约束：
 ## 8. 输出契约
 
 ### 8.1 ReviewResult
+
+下述身份与 fingerprint 由服务封装，不接受模型提供。模型只返回 summary、findings、coverage、limitations；finding 的可选 null 字段规范化为未提供后再校验。
 
 至少包含：
 
@@ -266,7 +271,7 @@ delegate_agent 约束：
 | --- | --- | --- |
 | Runtime | Node.js + TypeScript | 固定受支持版本和锁文件 |
 | Agent | Pi Agent SDK、AgentSession、自定义 Tools / Skills | M2 加入 delegate_agent 与专项会话 |
-| GitHub | GitHub App + Octokit | 线程详情需要时补 GraphQL |
+| GitHub | GitHub App + 原生 fetch | 线程详情需要时补 GraphQL |
 | HTTP | Node HTTP 或轻量 HTTP 框架 | 按 Webhook / 管理 API 需求确定 |
 | Job | M0 内存；M1 PostgreSQL + 单实例后台执行 | 多 Worker 后再考虑 BullMQ + Redis |
 | Memory | PostgreSQL + 作用域过滤 + 文本检索 | 召回不足时加 pgvector |

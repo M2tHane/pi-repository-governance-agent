@@ -56,7 +56,7 @@ export class GitHubClient {
 
   getConversationComments(token: string, repository: string, number: number) { return this.pages<{ id: number; html_url: string; body: string; user: { id: number; login: string; type: string } }>(token, `/repos/${repository}/issues/${number}/comments`); }
   getReviews(token: string, repository: string, number: number) { return this.pages<{ id: number; html_url: string; body: string; state: string; commit_id: string; user: { id: number; login: string; type: string } }>(token, `/repos/${repository}/pulls/${number}/reviews`); }
-  getReviewComments(token: string, repository: string, number: number) { return this.pages<{ id: number; html_url: string; body: string; path: string; line: number | null; user: { id: number; login: string; type: string } }>(token, `/repos/${repository}/pulls/${number}/comments`); }
+  getReviewComments(token: string, repository: string, number: number) { return this.pages<{ id: number; in_reply_to_id?: number; html_url: string; body: string; path: string; line: number | null; commit_id: string; created_at: string; user: { id: number; login: string; type: string } }>(token, `/repos/${repository}/pulls/${number}/comments`); }
 
   async getFiles(token: string, repository: string, number: number): Promise<Array<{ filename: string; status: string; patch?: string }>> {
     const files = [];
@@ -67,11 +67,17 @@ export class GitHubClient {
     }
   }
 
-  createReview(token: string, job: ReviewJob, body: string) {
+  createReview(token: string, job: ReviewJob, body: string, comments: Array<{ path: string; line: number; side: "LEFT" | "RIGHT"; body: string }> = []) {
     return this.request<{ id: number; html_url: string }>(token, `/repos/${job.repository}/pulls/${job.prNumber}/reviews`, {
       method: "POST",
-      body: JSON.stringify({ commit_id: job.headSha, event: "COMMENT", body }),
+      body: JSON.stringify({ commit_id: job.headSha, event: "COMMENT", body, comments }),
     });
+  }
+
+  getReviewCommentsForReview(token: string, repository: string, number: number, reviewId: number) { return this.pages<{ id: number; html_url: string; body: string }>(token, `/repos/${repository}/pulls/${number}/reviews/${reviewId}/comments`); }
+
+  replyToReviewComment(token: string, repository: string, number: number, rootCommentId: number, body: string) {
+    return this.request<{ id: number; html_url: string }>(token, `/repos/${repository}/pulls/${number}/comments/${rootCommentId}/replies`, { method: "POST", body: JSON.stringify({ body }) });
   }
 
   async exchangeOAuthCode(clientId: string, clientSecret: string, code: string) {

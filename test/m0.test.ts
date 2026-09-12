@@ -91,6 +91,25 @@ test("持久层失败时 webhook 返回 503", async () => {
   } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
 });
 
+test("review comment 只路由人类对已绑定线程的回复", async () => {
+  const calls: any[] = [];
+  const target = { accept: async () => ({ kind: "accepted" as const }), acceptReply: async (input: any) => { calls.push(input); return { kind: "accepted" as const, job: { id: "reply-job" } as ReviewJob }; } };
+  const { server } = createApp(config, target);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); assert(address && typeof address === "object");
+  const url = `http://127.0.0.1:${address.port}/github/webhook`;
+  const value = { action: "created", installation: { id: 2 }, repository: { id: 3, full_name: "owner/repo" }, pull_request: { number: 4, state: "open", base: { sha: "base" }, head: { sha: "head" } }, comment: { id: 12, in_reply_to_id: 11, created_at: "2026-09-11T00:00:00Z", html_url: "https://example/reply/12", body: "fixed", path: "src/a.ts", line: 2, commit_id: "head", user: { id: 5, login: "human", type: "User" } } };
+  const post = async (event: string, eventPayload: object, delivery: string) => { const text = JSON.stringify(eventPayload); return fetch(url, { method: "POST", headers: { "x-github-event": event, "x-github-delivery": delivery, "x-hub-signature-256": signature(text) }, body: text }); };
+  try {
+    assert.equal((await post("pull_request_review_comment", value, "reply-1")).status, 202);
+    assert.equal(calls[0]?.rootCommentId, 11);
+    assert.equal((await post("pull_request_review_comment", { ...value, comment: { ...value.comment, user: { ...value.comment.user, type: "Bot" } } }, "reply-bot")).status, 200);
+    assert.equal((await post("pull_request_review_comment", { ...value, comment: { ...value.comment, in_reply_to_id: undefined } }, "reply-root")).status, 200);
+    assert.equal((await post("issue_comment", value, "issue-comment")).status, 200);
+    assert.equal(calls.length, 1);
+  } finally { await new Promise<void>((resolve) => server.close(() => resolve())); }
+});
+
 function job(deliveryId: string, headSha = deliveryId): Omit<ReviewJob, "id" | "status"> {
   return { deliveryId, installationId: 1, repositoryId: 2, repository: "owner/repo", cloneUrl: "url", prNumber: 3, title: "", body: "", baseSha: "base", headSha };
 }
@@ -190,11 +209,14 @@ test("ReviewResult 只接受约定结构和有限输出", () => {
   assert.equal(parseReviewResult('{"summary":"ok","findings":[],"coverage":["diff"],"limitations":[]}').summary, "ok");
   assert.throws(() => parseReviewResult('{"summary":"raw"}'), /结构无效/);
   assert.throws(() => parseReviewResult("x".repeat(50_001)), /超过预算/);
+  const optional = { summary: "ok", findings: [{ category: "correctness", severity: "low", evidenceLevel: "strong", description: "issue", evidence: "code", impact: "impact", path: null, line: null, side: null, suggestion: null, memory: null }], coverage: [], limitations: [] };
+  assert.equal(parseReviewResult(JSON.stringify(optional)).findings[0]?.memory, undefined);
+  assert.throws(() => parseReviewResult(JSON.stringify({ ...optional, findings: [{ ...optional.findings[0], memory: {} }] })), /Memory/);
 });
 
 test("模型不能引用未召回或跨仓库 Memory", () => {
   const memory = { id: "memory", version: 1, repositoryId: 2, installationId: 1, type: "engineering_rule", title: "rule", content: "content", rationale: "reason", scope: {}, source: { pullRequestNumber: 1, commitSha: "sha", commentIds: [1] }, evidence: [], confidence: 1, uncertainties: [], status: "ACTIVE", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } satisfies MemoryRecord;
-  const result: import("../src/types.js").ReviewResult = { summary: "", coverage: [], limitations: [], findings: [{ description: "issue", evidence: "code", impact: "impact", memory: { id: "memory", version: 1, source: {} } }] };
+  const result: import("../src/types.js").ReviewResult = { summary: "", coverage: [], limitations: [], findings: [{ category: "team_rule", severity: "medium", evidenceLevel: "strong", description: "issue", evidence: "code", impact: "impact", memory: { id: "memory", version: 1, source: {} } }] };
   validateMemoryReferences(result, [memory], 2);
   assert.equal(result.findings[0]?.memory?.source.pullRequestNumber, 1);
   assert.throws(() => validateMemoryReferences({ ...result, findings: [{ ...result.findings[0]!, memory: { id: "invented", version: 1, source: {} } }] }, [memory], 2), /未召回/);
@@ -209,7 +231,7 @@ test("GitHub Publisher 固定 COMMENT 和 commit_id", async () => {
   globalThis.fetch = async (_url, init) => { sent = JSON.parse(String(init?.body)); return new Response(JSON.stringify({ id: 9, html_url: "https://example/review/9" }), { status: 200 }); };
   try {
     await client.createReview("token", { ...job("delivery", "head"), id: "job", status: "running" }, "body");
-    assert.deepEqual(sent, { commit_id: "head", event: "COMMENT", body: "body" });
+    assert.deepEqual(sent, { commit_id: "head", event: "COMMENT", body: "body", comments: [] });
     globalThis.fetch = async () => new Response(JSON.stringify({ message: "Resource not accessible by integration" }), { status: 403 });
     await assert.rejects(client.createReview("token", { ...job("denied", "head"), id: "job", status: "running" }, "body"), /403/);
   } finally { globalThis.fetch = original; }

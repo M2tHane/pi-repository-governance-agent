@@ -92,7 +92,7 @@ export class MemoryService {
   }
 }
 
-function scopeMatches(memory: MemoryRecord, paths: string[], conditions: string[]) {
+export function scopeMatches(memory: MemoryRecord, paths: string[], conditions: string[]) {
   const scope = memory.scope;
   if (scope.paths?.length && !paths.some((path) => scope.paths!.some((pattern) => matchesGlob(path, pattern)))) return false;
   if (scope.languages?.length) {

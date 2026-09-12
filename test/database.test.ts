@@ -1,14 +1,29 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { before, after } from "node:test";
+import { randomUUID } from "node:crypto";
 import { Database } from "../src/database.js";
 import { PersistentRunner } from "../src/runner.js";
 import { MemoryService } from "../src/memory.js";
-import type { DecisionProposal, ReviewJob } from "../src/types.js";
+import type { DecisionProposal, ReplyResult, ReviewJob } from "../src/types.js";
 import { createServer } from "node:http";
 import { createAdminHandler } from "../src/admin.js";
 import type { Config } from "../src/config.js";
 
-const databaseUrl = process.env.DATABASE_URL;
+let databaseUrl = process.env.DATABASE_URL;
+const schema = "m2_test_" + randomUUID().replaceAll("-", "");
+let control: Database | undefined;
+before(async () => {
+  if (!databaseUrl) return;
+  control = new Database(databaseUrl);
+  await control.pool.query(`CREATE SCHEMA "${schema}"`);
+  const url = new URL(databaseUrl); url.searchParams.set("options", `-c search_path=${schema}`); databaseUrl = url.toString();
+  const isolated = new Database(databaseUrl);
+  try { await isolated.migrate(); } finally { await isolated.close(); }
+});
+after(async () => {
+  if (!control) return;
+  try { await control.pool.query(`DROP SCHEMA "${schema}" CASCADE`); } finally { await control.close(); }
+});
 
 test("migration 幂等且 delivery/job 跨连接持久化", { skip: !databaseUrl }, async () => {
   const repositoryId = 9_000_000_001;
@@ -82,7 +97,7 @@ test("持久 Runner 恢复 running Job 并保存发布结果", { skip: !database
     assert.equal(publication.rows[0].status, "published");
     assert.equal(String(publication.rows[0].github_review_id), "123");
   } finally {
-    runner.stop();
+    await runner.stop();
     await database.pool.query("DELETE FROM review_publications WHERE job_id=$1", [accepted.job!.id]);
     await database.pool.query("DELETE FROM jobs WHERE repository_id=$1", [repositoryId]);
     await database.pool.query("DELETE FROM webhook_deliveries WHERE repository_id=$1", [repositoryId]);
@@ -103,7 +118,8 @@ test("transient 最多重试三次，永久错误只执行一次", { skip: !data
   const counts = new Map<string, number>();
   const runner = new PersistentRunner(database, async (job) => {
     counts.set(job.id, (counts.get(job.id) ?? 0) + 1);
-    if (job.title === "transient") throw new Error("remote HTTP 500");
+    // 本例验证重试次数，替身通过 Retry-After: 0 避免等待真实退避。
+    if (job.title === "transient") throw Object.assign(new Error("remote HTTP 500"), { retryAfterSeconds: 0 });
     throw new Error("GitHub API failed (403)");
   }, 10);
   try {
@@ -114,7 +130,7 @@ test("transient 最多重试三次，永久错误只执行一次", { skip: !data
     assert.equal(counts.get(permanent.job!.id), 1);
     assert.equal((await database.getJob(transient.job!.id))?.attempt, 3);
   } finally {
-    runner.stop();
+    await runner.stop();
     await database.pool.query("DELETE FROM jobs WHERE repository_id=$1", [repositoryId]);
     await database.pool.query("DELETE FROM webhook_deliveries WHERE repository_id=$1", [repositoryId]);
     await database.pool.query("DELETE FROM repositories WHERE id=$1", [repositoryId]);
@@ -235,4 +251,68 @@ test("OAuth state、Session、CSRF 与跨仓库 Maintainer 权限", { skip: !dat
     await cleanup();
     await database.close();
   }
+});
+
+test("Finding 绑定、Reply 幂等、状态和 decision clue", { skip: !databaseUrl }, async () => {
+  const repositoryId = 9_000_000_008;
+  const database = new Database(databaseUrl!);
+  await database.migrate();
+  const cleanup = async () => {
+    await database.pool.query("DELETE FROM decision_clues WHERE repository_id=$1", [repositoryId]);
+    await database.pool.query("DELETE FROM reply_publications WHERE finding_id IN (SELECT id FROM review_findings WHERE repository_id=$1)", [repositoryId]);
+    await database.pool.query("DELETE FROM agent_runs WHERE job_id IN (SELECT id FROM jobs WHERE repository_id=$1)", [repositoryId]);
+    await database.pool.query("DELETE FROM review_findings WHERE repository_id=$1", [repositoryId]);
+    await database.pool.query("DELETE FROM jobs WHERE repository_id=$1", [repositoryId]);
+    await database.pool.query("DELETE FROM webhook_deliveries WHERE repository_id=$1", [repositoryId]);
+    await database.pool.query("DELETE FROM repositories WHERE id=$1", [repositoryId]);
+  };
+  await cleanup();
+  const input = { deliveryId: "finding-review", installationId: 1, repositoryId, repository: "owner/finding-test", cloneUrl: "url", prNumber: 2, title: "", body: "", baseSha: "base", headSha: "head" };
+  const accepted = await database.accept(input, { event: "pull_request", action: "opened" });
+  const finding = { path: "src/a.ts", line: 2, side: "RIGHT", category: "correctness", severity: "high", evidenceLevel: "strong", description: "bad", evidence: "line", impact: "crash" } as const;
+  const stored = await database.saveFindings(accepted.job!, [finding], new Set([finding]));
+  assert.equal((await database.saveFindings(accepted.job!, [finding], new Set([finding])))[0]?.id, stored[0]?.id);
+  const different = { ...finding, description: "another cause", evidence: "another code path", impact: "another impact" };
+  const collocated = await database.saveFindings(accepted.job!, [finding, different, { ...finding }], new Set([finding, different]));
+  assert.notEqual(collocated[0]!.id, collocated[1]!.id);
+  assert.equal(collocated[0]!.id, collocated[2]!.id);
+  assert.deepEqual((await database.saveFindings(accepted.job!, [finding, different], new Set([finding, different]))).map(item => item.id), collocated.slice(0, 2).map(item => item.id));
+  assert.equal(await database.bindFindings(accepted.job!, 10, [{ id: 11, body: `body <!-- pi-finding:${stored[0]!.id} -->` }]), 1);
+  assert.equal((await database.getFindingByRoot(repositoryId, 2, 11))?.bindingStatus, "bound");
+  const agentRunId = await database.startAgentRun(accepted.job!.id, "security_reviewer", 500, 1000);
+  await database.finishAgentRun(agentRunId, { status: "succeeded", model: "test", usage: { input: 10, output: 5, cacheRead: 20, totalTokens: 35 }, coverage: ["auth"], limitations: [] });
+  const agentRun = await database.pool.query("SELECT * FROM agent_runs WHERE id=$1", [agentRunId]);
+  assert.equal(agentRun.rows[0].usage_output_tokens, 5);
+  assert.equal(agentRun.rows[0].usage.totalTokens, 35);
+  assert.equal("reasoning" in agentRun.rows[0], false);
+  const replyInput = { deliveryId: "reply-delivery", installationId: 1, repositoryId, repository: "owner/finding-test", prNumber: 2, baseSha: "base", eventHeadSha: "head", rootCommentId: 11, sourceCommentId: 12, sourceCommentUrl: "https://example/reply/12", humanActorId: 42, humanActorLogin: "human", humanReplyBody: "fixed" };
+  const reply = await database.acceptReply(replyInput);
+  assert.equal(reply.kind, "accepted");
+  assert.equal((await database.acceptReply({ ...replyInput, deliveryId: "reply-duplicate" })).kind, "duplicate");
+  assert.equal((await database.acceptReply({ ...replyInput, deliveryId: "foreign", rootCommentId: 99, sourceCommentId: 13 })).kind, "ignored");
+  const result = { findingId: stored[0]!.id, analysisHeadSha: "head", conclusion: "VALID_EXCEPTION", summary: "valid locally", evidence: [{ path: "src/a.ts", line: 2, detail: "adapter only" }], memoryReferences: [], suggestedFindingStatus: "EXCEPTION_PENDING", decisionClue: { type: "possible_exception", summary: "adapter only" }, limitations: [] } satisfies ReplyResult;
+  await database.finishReply(reply.job!, result, { id: 13, html_url: "https://example/reply/13" });
+  assert.equal((await database.getFinding(stored[0]!.id))?.status, "EXCEPTION_PENDING");
+  assert.equal((await database.getDecisionClues(repositoryId, 2)).length, 1);
+  await database.finishJob({ ...accepted.job!, status: "succeeded" });
+  await database.finishJob({ ...reply.job!, status: "succeeded" });
+  const newer = await database.acceptReply({ ...replyInput, deliveryId: "reply-newer-first", sourceCommentId: 15, humanReplyCreatedAt: "2030-01-01T00:00:00Z" });
+  const older = await database.acceptReply({ ...replyInput, deliveryId: "reply-older-second", sourceCommentId: 14, humanReplyCreatedAt: "2029-01-01T00:00:00Z" });
+  assert.equal((await database.claimNext())?.id, older.job!.id);
+  await database.finishJob({ ...older.job!, status: "succeeded" });
+  assert.equal((await database.claimNext())?.id, newer.job!.id);
+  await database.finishReply(newer.job!, { ...result, conclusion: "STILL_VALID", suggestedFindingStatus: "STILL_VALID", decisionClue: undefined }, { id: 16, html_url: "https://example/reply/16" });
+  assert.equal((await database.acceptReply({ ...replyInput, deliveryId: "reply-late", sourceCommentId: 13, humanReplyCreatedAt: "2028-01-01T00:00:00Z" })).kind, "ignored");
+  assert.equal(await database.isOlderReply(stored[0]!.id, 14, "2029-01-01T00:00:00Z"), true);
+  const reviewAbort = new AbortController(), replyAbort = new AbortController(), unrelated = new AbortController();
+  database.registerReviewAbort(accepted.job!, reviewAbort);
+  database.registerReviewAbort(reply.job!, replyAbort);
+  database.registerReviewAbort({ ...accepted.job!, id: "other-pr", prNumber: 99 }, unrelated);
+  await database.accept({ ...input, deliveryId: "new-head-cancels", headSha: "head-2" }, { event: "pull_request", action: "synchronize" });
+  assert(reviewAbort.signal.aborted && replyAbort.signal.aborted);
+  assert.equal(unrelated.signal.aborted, false);
+  database.stopReviews();
+  assert(unrelated.signal.aborted);
+  try { assert.equal((await database.getReplyPublication(12))?.status, "published"); }
+  finally { await cleanup(); await database.close(); }
 });

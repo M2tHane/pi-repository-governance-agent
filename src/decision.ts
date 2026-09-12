@@ -40,8 +40,8 @@ export function proposalFingerprint(repositoryId: number, proposal: DecisionProp
 export function createDecisionProcessor(config: Config, database: Database, github = new GitHubClient(config.appId, config.privateKey)) {
   return async (job: ReviewJob) => {
     const token = await github.installationToken(job.installationId);
-    const [pr, files, comments, reviews, reviewComments] = await Promise.all([
-      github.getPullRequest(token, job.repository, job.prNumber), github.getFiles(token, job.repository, job.prNumber), github.getConversationComments(token, job.repository, job.prNumber), github.getReviews(token, job.repository, job.prNumber), github.getReviewComments(token, job.repository, job.prNumber),
+    const [pr, files, comments, reviews, reviewComments, decisionClues] = await Promise.all([
+      github.getPullRequest(token, job.repository, job.prNumber), github.getFiles(token, job.repository, job.prNumber), github.getConversationComments(token, job.repository, job.prNumber), github.getReviews(token, job.repository, job.prNumber), github.getReviewComments(token, job.repository, job.prNumber), database.getDecisionClues(job.repositoryId, job.prNumber),
     ]);
     if (!pr.merged || pr.merge_commit_sha !== job.headSha) throw new Error("merged snapshot 与 Job 不一致");
     const discussions = [...comments, ...reviews, ...reviewComments].map((entry) => ({ id: entry.id, url: entry.html_url, body: entry.body, author: entry.user.login, authorType: entry.user.type, human: entry.user.type === "User" }));
@@ -55,7 +55,7 @@ export function createDecisionProcessor(config: Config, database: Database, gith
       const { session } = await createAgentSession({ cwd: root, modelRuntime: runtime, model, noTools: "all", customTools: workspaceTools(root), tools: ["read_file", "search_text"], resourceLoader: loader, sessionManager: SessionManager.inMemory() });
       const timer = setTimeout(() => void session.abort(), config.agentTimeoutMs);
       try {
-        await session.prompt(JSON.stringify({ task: "从已合并 PR 提取可复用工程决定", repository: job.repository, pullRequestNumber: job.prNumber, mergedSnapshot: job.headSha, title: pr.title, body: pr.body, changedFiles: files, discussions }));
+        await session.prompt(JSON.stringify({ task: "从已合并 PR 提取可复用工程决定。decisionClues 仅是待核实索引，不能替代人类评论与最终代码双证据", repository: job.repository, pullRequestNumber: job.prNumber, mergedSnapshot: job.headSha, title: pr.title, body: pr.body, changedFiles: files, discussions, decisionClues }));
         const message = [...session.messages].reverse().find((entry) => entry.role === "assistant");
         if (!message || message.role !== "assistant") throw new Error("Decision Extractor 没有返回结果");
         if (message.stopReason === "aborted") { job.status = "timeout"; throw new TimeoutError(); }

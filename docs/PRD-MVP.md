@@ -88,7 +88,7 @@ M0 允许使用内存队列，仅用于证明链路成立。
 
 ### 3.3 后续阶段
 
-M2：Reply Handler、Main Agent、delegate_agent、专项 SubAgent。
+M2：Reply Handler、Main Agent、delegate_agent、专项 SubAgent；当前正在实现与验收，状态和固定样本增益以 [M2 清单](./tasks/M2.md) 为准。
 
 M3：Health Auditor、定时与手动仓库健康检查。
 

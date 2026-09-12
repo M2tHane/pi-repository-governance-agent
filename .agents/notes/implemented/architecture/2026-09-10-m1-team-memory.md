@@ -36,6 +36,8 @@ M1 只在交互 Session 内需要用户 token 来实时检查仓库权限。服�
 
 ## Consequences
 
+后续 [M2 线程复核与选择性多 Agent](../../proposed/architecture/2026-09-11-m2-reply-and-multi-agent.md) 在本决定的 PostgreSQL / Workspace / Memory 边界上扩展 finding、reply 和 agent run，不替换维护者确认流程。
+
 收益：受支持的 Webhook 在事务提交后才返回 202，任务能跨正常重启恢复；合并讨论形成可追溯但默认不生效的候选规则；维护者操作有真实 GitHub 权限边界；后续 Review 只能引用当前仓库实际召回的 ACTIVE 版本。
 
 代价：单 Worker 限制吞吐，内存 OAuth Session 会在重启时失效，文本检索对语义改写不敏感。真实跨 PR 证明仍依赖已授权测试仓库中的 PR A/PR B 操作，本地测试不能替代这项外部证据。

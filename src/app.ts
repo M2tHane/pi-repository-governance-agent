@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Config } from "./config.js";
-import type { JobAcceptor } from "./database.js";
+import type { JobAcceptor, ReviewReplyInput } from "./database.js";
 import { JobQueue } from "./queue.js";
 import type { PullRequestEvent, ReviewJob } from "./types.js";
 
@@ -36,6 +36,14 @@ function parsePullRequest(value: unknown): PullRequestEvent {
   return event as PullRequestEvent;
 }
 
+function parseReviewComment(value: unknown): ReviewReplyInput & { action: string; state: string; authorType: string } {
+  const event = value as any;
+  const comment = event?.comment, pr = event?.pull_request, repository = event?.repository;
+  if (typeof comment?.created_at !== "string" || !Number.isFinite(Date.parse(comment.created_at))) throw new Error("review comment created_at 无效");
+  if (typeof event?.action !== "string" || !Number.isSafeInteger(event?.installation?.id) || !Number.isSafeInteger(repository?.id) || typeof repository?.full_name !== "string" || !Number.isSafeInteger(pr?.number) || typeof pr?.state !== "string" || typeof pr?.base?.sha !== "string" || typeof pr?.head?.sha !== "string" || !Number.isSafeInteger(comment?.id) || !Number.isSafeInteger(comment?.in_reply_to_id) || typeof comment?.body !== "string" || typeof comment?.html_url !== "string" || !Number.isSafeInteger(comment?.user?.id) || typeof comment?.user?.login !== "string" || typeof comment?.user?.type !== "string") throw new Error("缺少 review comment 必需字段");
+  return { action: event.action, state: pr.state, authorType: comment.user.type, deliveryId: "", installationId: event.installation.id, repositoryId: repository.id, repository: repository.full_name, prNumber: pr.number, baseSha: pr.base.sha, eventHeadSha: pr.head.sha, rootCommentId: comment.in_reply_to_id, sourceCommentId: comment.id, sourceCommentUrl: comment.html_url, humanActorId: comment.user.id, humanActorLogin: comment.user.login, humanReplyBody: comment.body, humanReplyCreatedAt: new Date(comment.created_at).toISOString() };
+}
+
 export function createApp(config: Config, target: JobAcceptor | ((job: ReviewJob) => Promise<void>), fallback?: (request: IncomingMessage, response: ServerResponse) => Promise<void>) {
   const queue = typeof target === "function" ? new JobQueue(config.queueCapacity, target) : undefined;
   const accept = typeof target === "function" ? (input: Omit<ReviewJob, "id" | "status">, _meta: { event: string; action: string; merged?: boolean; mergeCommitSha?: string | null }) => Promise.resolve(queue!.enqueue(input)) : target.accept.bind(target);
@@ -52,12 +60,24 @@ export function createApp(config: Config, target: JobAcceptor | ((job: ReviewJob
     if (!verifySignature(body, signature, config.webhookSecret)) return send(response, 401, { error: "签名无效" });
     let payload: unknown;
     try { payload = JSON.parse(body.toString("utf8")); } catch { return send(response, 400, { error: "JSON 无效" }); }
+    if (eventName === "pull_request_review_comment") {
+      if (typeof target === "function" || !("acceptReply" in target) || typeof target.acceptReply !== "function") return send(response, 200, { ignored: true });
+      const raw = payload as any;
+      if (raw?.action !== "created" || raw?.pull_request?.draft === true || !Number.isSafeInteger(raw?.comment?.in_reply_to_id) || raw?.comment?.user?.type !== "User") return send(response, 200, { ignored: true });
+      let input;
+      try { input = parseReviewComment(payload); } catch (error) { return send(response, 422, { error: error instanceof Error ? error.message : "payload 无效" }); }
+      if (input.action !== "created" || input.state !== "open" || input.authorType !== "User" || !config.allowedRepositories.has(input.repository.toLowerCase())) return send(response, 200, { ignored: true });
+      let result;
+      try { result = await target.acceptReply({ ...input, deliveryId }); } catch { return send(response, 503, { error: "任务持久化失败" }); }
+      return result.kind === "ignored" ? send(response, 200, { ignored: true }) : send(response, 202, { accepted: result.kind === "accepted", duplicate: result.kind === "duplicate", jobId: result.job?.id });
+    }
     if (eventName !== "pull_request") return send(response, 200, { ignored: true });
     let event: PullRequestEvent;
     try { event = parsePullRequest(payload); } catch (error) { return send(response, 422, { error: error instanceof Error ? error.message : "payload 无效" }); }
     const repository = event.repository.full_name.toLowerCase();
     const pr = event.pull_request;
     const closed = event.action === "closed";
+    if (!closed && (pr.draft || pr.state !== "open") && typeof target !== "function") target.cancelReview?.(event.repository.id, pr.number);
     if ((!actions.has(event.action) && !closed) || (!closed && (pr.draft || pr.state !== "open" || pr.head.repo?.full_name !== event.repository.full_name)) || !config.allowedRepositories.has(repository)) return send(response, 200, { ignored: true });
     let result;
     try { result = await accept({ deliveryId, installationId: event.installation.id, repositoryId: event.repository.id, repository: event.repository.full_name, cloneUrl: `https://github.com/${event.repository.full_name}.git`, prNumber: pr.number, title: pr.title, body: pr.body ?? "", baseSha: pr.base.sha, headSha: pr.head.sha }, { event: eventName, action: event.action, merged: pr.merged, mergeCommitSha: pr.merge_commit_sha }); }

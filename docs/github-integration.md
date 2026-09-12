@@ -1,6 +1,6 @@
 # Pi Repository Governance Agent — GitHub Integration
 
-版本：v0.1｜日期：2026-09-10
+版本：v0.2｜日期：2026-09-11
 
 > 本文定义 GitHub App、Webhook、事件映射、PR 上下文读取、Review 发布和权限要求。产品范围见 [PRD-MVP.md](./PRD-MVP.md)。
 
@@ -17,7 +17,7 @@ Node.js / TypeScript 服务负责：
 - GitHub App Webhook 接收。
 - 请求体验签。
 - installation / repository 归属判断。
-- Octokit API 访问。
+- 原生 fetch 调用 GitHub REST API。
 - GitHub Review 发布。
 - Token 获取与刷新。
 
@@ -207,6 +207,12 @@ pull_request_review_comment.created
 - 不把普通 PR 会话区 `issue_comment` 自动当成对 AI 的回应。
 
 忽略自身和其他机器人回复，防止循环。
+
+M2 只信任数据库已绑定的 root comment ID，隐藏 pi-finding 标记只用于发布后的映射。source comment 有持久业务幂等；已接收回复按 GitHub created_at 与 comment ID 处理，迟到旧回复不能回退较新结论。
+
+Reply 执行前重读 PR head，发布前再复核。head 变化时重排同一 source comment；closed、Draft 或仓库暂停时取消。FIXED / MISJUDGMENT / VALID_EXCEPTION / STILL_VALID / NEEDS_CLARIFICATION 映射到 finding 状态，例外只形成 decision clue。
+
+Review 发布成功后，comment ID 映射失败单独标记 binding incomplete，保留 published。线程回复网络结果不确定时进入 uncertain，不盲目重发。具体证据与剩余验收见 [M2](./tasks/M2.md)。
 
 ## 11. Merge 后 Decision Extractor 上下文
 

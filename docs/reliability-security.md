@@ -369,6 +369,14 @@ Team Memory 独立保存，并遵循自身生命周期。
 
 ## 19. 预算与资源限制
 
+M2 的 repository budgetTokens 是整个 PR Job 的总量。Main 与 child 在同一 ledger 预留每次 Provider 实际 body 的输入字节估计及输出，完成后按含 cache 的 usage 结算；单次输出最多 16384 tokens。估计包含协议余量，会保守拒绝，不能把额度视为精确 tokenizer 结果。
+
+Provider 已收到请求但未回报 usage 时，保留该次预留额度，并与实际 token 分列。失败和取消的会话也保存用量；共享取消原因不承载可被其他 Session 覆盖的 usage。SDK 自动压缩、自动重试及 Provider 重试关闭。
+
+委派深度固定 1、同时最多 2 项；role、focus path、Memory、时间和 token 都由服务检查。Draft、closed、新 head、仓库暂停和受控停止通过 AbortSignal 取消 Main 与 child。Reply 遇到 superseded 则重新绑定当前 head，不丢失人类回复。
+
+数据库测试在一次性 schema 运行；测试 Worker 不接触真实 Job 队列。当前验证和限制见 [M2 清单](./tasks/M2.md)。
+
 每个 Job 应配置：
 
 - 最大模型调用次数。

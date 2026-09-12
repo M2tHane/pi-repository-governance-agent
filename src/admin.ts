@@ -8,7 +8,7 @@ import { GitHubClient } from "./github.js";
 import { MemoryService, type Actor, type CandidatePatch } from "./memory.js";
 
 type Session = Actor & { token: string; csrf: string; expiresAt: number };
-type Repository = { id: number; installationId: number; fullName: string; enabled: boolean; includePaths: string[]; excludePaths: string[]; outputLanguage: string; budgetTokens: number };
+type Repository = { id: number; installationId: number; fullName: string; enabled: boolean; includePaths: string[]; excludePaths: string[]; outputLanguage: string; budgetTokens: number; reviewMode: "single" | "auto"; maxDelegates: number };
 
 function json(response: ServerResponse, status: number, value: unknown) {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }).end(JSON.stringify(value));
@@ -26,7 +26,7 @@ async function body(request: IncomingMessage) {
 }
 
 function repository(row: Record<string, unknown>): Repository {
-  return { id: Number(row.id), installationId: Number(row.installation_id), fullName: String(row.full_name), enabled: Boolean(row.enabled), includePaths: row.include_paths as string[], excludePaths: row.exclude_paths as string[], outputLanguage: String(row.output_language), budgetTokens: Number(row.budget_tokens) };
+  return { id: Number(row.id), installationId: Number(row.installation_id), fullName: String(row.full_name), enabled: Boolean(row.enabled), includePaths: row.include_paths as string[], excludePaths: row.exclude_paths as string[], outputLanguage: String(row.output_language), budgetTokens: Number(row.budget_tokens), reviewMode: row.review_mode as "single" | "auto", maxDelegates: Number(row.max_delegates) };
 }
 
 export function createAdminHandler(config: Config, database: Database, github = new GitHubClient(config.appId, config.privateKey)) {
@@ -113,15 +113,16 @@ export function createAdminHandler(config: Config, database: Database, github = 
         const repositoryMatch = url.pathname.match(/^\/api\/repositories\/(\d+)$/);
         if (repositoryMatch && request.method === "PATCH") {
           const access = await authorize(request, response, Number(repositoryMatch[1])); if (!access) return;
-          const value = await body(request) as Partial<Pick<Repository, "enabled" | "includePaths" | "excludePaths" | "outputLanguage" | "budgetTokens">>;
-          if ((value.enabled !== undefined && typeof value.enabled !== "boolean") || (value.includePaths !== undefined && (!Array.isArray(value.includePaths) || !value.includePaths.every((x) => typeof x === "string"))) || (value.excludePaths !== undefined && (!Array.isArray(value.excludePaths) || !value.excludePaths.every((x) => typeof x === "string"))) || (value.outputLanguage !== undefined && typeof value.outputLanguage !== "string") || (value.budgetTokens !== undefined && (!Number.isSafeInteger(value.budgetTokens) || value.budgetTokens! <= 0))) return json(response, 422, { error: "仓库配置无效" });
-          const updated = await database.pool.query("UPDATE repositories SET enabled=COALESCE($2,enabled),include_paths=COALESCE($3,include_paths),exclude_paths=COALESCE($4,exclude_paths),output_language=COALESCE($5,output_language),budget_tokens=COALESCE($6,budget_tokens),updated_at=now() WHERE id=$1 RETURNING *", [access.repository.id, value.enabled ?? null, value.includePaths ?? null, value.excludePaths ?? null, value.outputLanguage ?? null, value.budgetTokens ?? null]);
+          const value = await body(request) as Partial<Pick<Repository, "enabled" | "includePaths" | "excludePaths" | "outputLanguage" | "budgetTokens" | "reviewMode" | "maxDelegates">>;
+          if ((value.enabled !== undefined && typeof value.enabled !== "boolean") || (value.includePaths !== undefined && (!Array.isArray(value.includePaths) || !value.includePaths.every((x) => typeof x === "string"))) || (value.excludePaths !== undefined && (!Array.isArray(value.excludePaths) || !value.excludePaths.every((x) => typeof x === "string"))) || (value.outputLanguage !== undefined && typeof value.outputLanguage !== "string") || (value.budgetTokens !== undefined && (!Number.isSafeInteger(value.budgetTokens) || value.budgetTokens! <= 0)) || (value.reviewMode !== undefined && value.reviewMode !== "single" && value.reviewMode !== "auto") || (value.maxDelegates !== undefined && (!Number.isSafeInteger(value.maxDelegates) || value.maxDelegates! < 0 || value.maxDelegates! > 4))) return json(response, 422, { error: "仓库配置无效" });
+          const updated = await database.pool.query("UPDATE repositories SET enabled=COALESCE($2,enabled),include_paths=COALESCE($3,include_paths),exclude_paths=COALESCE($4,exclude_paths),output_language=COALESCE($5,output_language),budget_tokens=COALESCE($6,budget_tokens),review_mode=COALESCE($7,review_mode),max_delegates=COALESCE($8,max_delegates),updated_at=now() WHERE id=$1 RETURNING *", [access.repository.id, value.enabled ?? null, value.includePaths ?? null, value.excludePaths ?? null, value.outputLanguage ?? null, value.budgetTokens ?? null, value.reviewMode ?? null, value.maxDelegates ?? null]);
+          if (value.enabled === false) database.cancelRepository(access.repository.id);
           return json(response, 200, repository(updated.rows[0]));
         }
         if (request.method === "GET" && url.pathname === "/api/jobs") {
           const repositories = await allowedRepositories(user); const ids = repositories.map((item) => item.id);
           if (!ids.length) return json(response, 200, []);
-          const result = await database.pool.query("SELECT j.*,p.github_review_url FROM jobs j LEFT JOIN review_publications p ON p.job_id=j.id WHERE j.repository_id=ANY($1::bigint[]) ORDER BY j.created_at DESC LIMIT 200", [ids]);
+          const result = await database.pool.query("SELECT j.*,p.github_review_url,COALESCE((SELECT jsonb_agg(to_jsonb(a) - 'job_id' ORDER BY a.started_at) FROM agent_runs a WHERE a.job_id=j.id),'[]') agent_runs FROM jobs j LEFT JOIN review_publications p ON p.job_id=j.id WHERE j.repository_id=ANY($1::bigint[]) ORDER BY j.created_at DESC LIMIT 200", [ids]);
           return json(response, 200, result.rows);
         }
         const jobMatch = url.pathname.match(/^\/api\/jobs\/([0-9a-f-]+)$/i);
@@ -129,7 +130,14 @@ export function createAdminHandler(config: Config, database: Database, github = 
           const result = await database.pool.query("SELECT j.*,p.github_review_url FROM jobs j LEFT JOIN review_publications p ON p.job_id=j.id WHERE j.id=$1", [jobMatch[1]]);
           if (!result.rows[0]) return json(response, 404, { error: "Job 不存在" });
           if (!await authorize(request, response, Number(result.rows[0].repository_id))) return;
-          return json(response, 200, result.rows[0]);
+          const runs = await database.pool.query("SELECT * FROM agent_runs WHERE job_id=$1 ORDER BY started_at", [jobMatch[1]]);
+          return json(response, 200, { ...result.rows[0], agent_runs: runs.rows });
+        }
+        if (request.method === "GET" && url.pathname === "/api/findings") {
+          const repositories = await allowedRepositories(user); const ids = repositories.map((item) => item.id);
+          if (!ids.length) return json(response, 200, []);
+          const result = await database.pool.query("SELECT f.*,source_job.repository,j.payload->>'humanReplyBody' human_reply_body,j.payload->>'humanActorLogin' human_actor_login,j.payload->>'sourceCommentUrl' human_reply_url,r.source_comment_id,r.analysis_head_sha,r.result reply_result,r.github_reply_url,r.status reply_publish_status,CASE WHEN d.id IS NOT NULL THEN jsonb_build_object('id',d.id,'type',d.type,'summary',d.summary) END decision_clue FROM review_findings f JOIN jobs source_job ON source_job.id=f.job_id LEFT JOIN reply_publications r ON r.finding_id=f.id LEFT JOIN jobs j ON j.id=r.job_id LEFT JOIN decision_clues d ON d.repository_id=f.repository_id AND d.source_human_comment_id=r.source_comment_id WHERE f.repository_id=ANY($1::bigint[]) ORDER BY COALESCE(r.created_at,f.created_at) DESC", [ids]);
+          return json(response, 200, result.rows);
         }
         if (request.method === "GET" && url.pathname === "/api/memories") {
           const repositories = await allowedRepositories(user); const status = url.searchParams.get("status") ?? undefined;
