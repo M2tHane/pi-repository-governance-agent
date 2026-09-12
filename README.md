@@ -2,7 +2,7 @@
 
 一个 TypeScript 服务，通过 GitHub App 接收 Webhook，在固定提交的只读 Workspace 中调用 Pi，发布 COMMENT Review，并将合并后的工程决定交给维护者确认后用于后续审查。
 
-M0、M1 已完成。当前 M2 增加 inline finding、线程复核、按需多 Agent、共享预算和执行详情；验收状态与真实证据见 [M2 清单](docs/tasks/M2.md)。
+服务支持 inline finding、线程复核、按需多 Agent、共享预算，以及 M3 的仓库健康检查与历史报告。当前任务与验证见 [M3 清单](docs/tasks/M3.md)；M2 的独立人工验收状态见 [M2 清单](docs/tasks/M2.md)。
 
 ## 启动
 
@@ -35,11 +35,13 @@ npm start
 | GITHUB_OAUTH_CALLBACK_URL | 与 App 设置一致的 /auth/github/callback 地址 |
 | SESSION_SECRET | 至少 32 字符的本地会话签名 secret |
 | PORT / WEBHOOK_MAX_BYTES | HTTP 端口与 Webhook 请求大小上限 |
-| AGENT_TIMEOUT_MS | Review Job / 会话的时间上限，默认 300000 ms |
+| AGENT_TIMEOUT_MS | Review / 会话时间上限，默认 300000 ms；Health 取该值与 120000 ms 中的较小值 |
 | QUEUE_CAPACITY | 保留用于 M0 内存队列；当前 PostgreSQL Worker 不使用此参数 |
 | NODE_USE_ENV_PROXY / HTTPS_PROXY / NO_PROXY | 可选：让 Node 使用本机已有代理，保持 TLS 校验 |
 
 管理界面可设置 repository enabled、路径范围、输出语言、Job 总 token 预算、single/auto 和 max delegates。预算不足会明确失败或 partial，不能按 child 数量扩大额度。固定复杂样本的评测配置和实际用量记录在 M2 清单中。
+
+Health 页面使用同一仓库的路径范围、语言和预算。点击“运行健康检查”后，服务固定默认分支 SHA 和最近 30 天窗口；同仓库已有活动健康任务时返回原任务。定时默认关闭，可在 Health 页面设置每日／每周，并查看下次 UTC 执行时间。
 
 macOS 若对私钥路径返回 EPERM，应授权对应目录访问或将已有私钥放到可读的本地私密位置。浏览器能访问 GitHub 而 Node OAuth 请求失败时，检查系统代理与 Node 环境是否一致。
 
@@ -62,8 +64,13 @@ macOS 若对私钥路径返回 EPERM，应授权对应目录访问或将已有�
 - 简单 PR 使用单 Agent；复杂 PR 由 Main 从允许角色中选择，最多两项同时运行，深度固定为一层。
 - Main、Specialist 与 Reply 都不获得 shell、写文件、GitHub 写工具或 Memory mutation。
 - 新 head、Draft、关闭、暂停和服务停止会取消活动审查；发布前再次检查当前状态和 SHA。
+- Health 使用独立只读 Agent，报告保存在管理页；不发布 GitHub 评论、不运行仓库脚本、不修改源码或 Memory。
+- Health 定时与手动触发共享去重，异常重启最多补一个到期检查；领取时 PR / Reply / Decision 优先，不抢占已经运行的 Health。
+- App 被删除、暂停或移除已登记仓库时，验签后的事件会停用对应仓库并取消相关审查。重新接入后由维护者明确恢复启用。
 
 PostgreSQL 保存任务与幂等记录，异常重启后恢复 running Job。发布响应不确定时进入 uncertain，先核对远端再恢复。成功 Review 的线程绑定失败会单独标记，不重发整份 Review。当前不提供多 Worker 或 exactly-once 保证。
+
+Health 的单次清单上限是 200 个文本文件、每文件 64 KiB、合计 2 MiB；每次文件工具最多返回 200 行／16000 字符。CI 只读取已有权限可见的元数据，最多保存 50 项来源。没有权限、没有记录、截断或未读完整时明确展示覆盖限制，零意见不代表健康保证。重试保持原 SHA／窗口，并扣除本任务此前实际和未知消耗；有报告的任务不会重复调用模型。
 
 ## 检查与固定模型对照
 

@@ -113,7 +113,7 @@ export function requestTokenBudget(context: unknown, remaining: number) {
   return { maxTokens, reservedTokens: inputUpperBound + maxTokens };
 }
 
-export async function runAgentSession(input: Pick<AgentReviewInput, "root" | "provider" | "modelName" | "apiKey" | "timeoutMs" | "budgetTokens" | "signal" | "ledger"> & { systemPrompt: string; prompt: object; tools?: ToolDefinition[]; parallelTools?: boolean }) {
+export async function runAgentSession(input: Pick<AgentReviewInput, "root" | "provider" | "modelName" | "apiKey" | "timeoutMs" | "budgetTokens" | "signal" | "ledger"> & { systemPrompt: string; prompt: object; tools?: ToolDefinition[]; parallelTools?: boolean; onUsage?: (usage: AgentUsage) => Promise<void> }) {
   input.signal?.throwIfAborted();
   const started = Date.now(), usage = emptyUsage(), budget = input.budgetTokens ?? 20_000;
   const runtime = await ModelRuntime.create({ refreshOnCreate: false });
@@ -126,6 +126,14 @@ export async function runAgentSession(input: Pick<AgentReviewInput, "root" | "pr
   const { session } = await createAgentSession({ cwd: input.root, modelRuntime: runtime, model, noTools: "all", customTools, tools: customTools.map((tool) => tool.name), resourceLoader: loader, settingsManager: SettingsManager.inMemory({ compaction: { enabled: false }, retry: { enabled: false } }), sessionManager: SessionManager.inMemory() });
   session.agent.toolExecution = input.parallelTools ? "parallel" : "sequential";
   let budgetError: BudgetError | undefined, timedOut = false, reservedTokens = 0, requestSent = false;
+  let checkpoint = Promise.resolve();
+  const persistUsage = (pending = 0) => {
+    if (!input.onUsage) return checkpoint;
+    const snapshot = { ...usage, unreportedTokens: usage.unreportedTokens + pending };
+    checkpoint = checkpoint.then(() => input.onUsage!(snapshot));
+    void checkpoint.catch(() => undefined);
+    return checkpoint;
+  };
   const stream = session.agent.streamFunction;
   session.agent.streamFunction = (selectedModel, context, options) => {
     const remaining = () => Math.min(budget - usage.totalTokens - usage.unreportedTokens, input.ledger?.remaining ?? Infinity);
@@ -133,6 +141,7 @@ export async function runAgentSession(input: Pick<AgentReviewInput, "root" | "pr
     return stream(selectedModel, context, { ...options, maxTokens, maxRetries: 0, onPayload: async (payload, selected) => {
       // onPayload runs before the provider HTTP call; rejecting here never spends another request.
       if (budgetError) throw budgetError;
+      await checkpoint;
       input.signal?.throwIfAborted();
       if (timedOut) throw new TimeoutError();
       const prepared = await options?.onPayload?.(payload, selected) ?? payload;
@@ -145,6 +154,10 @@ export async function runAgentSession(input: Pick<AgentReviewInput, "root" | "pr
         body[field] = Math.min(Number(body[field]), reservation.maxTokens);
         input.ledger?.reserve(reservation.reservedTokens);
         reservedTokens = reservation.reservedTokens;
+        await persistUsage(reservedTokens);
+        input.signal?.throwIfAborted();
+        options?.signal?.throwIfAborted();
+        if (timedOut) throw new TimeoutError();
       } catch (error) { budgetError = error as BudgetError; throw error; }
       requestSent = true;
       return prepared;
@@ -157,6 +170,7 @@ export async function runAgentSession(input: Pick<AgentReviewInput, "root" | "pr
     if (requestSent && !reported.totalTokens) reported.unreportedTokens = reservedTokens;
     input.ledger?.settle(reservedTokens, reported.totalTokens + reported.unreportedTokens);
     reservedTokens = 0; requestSent = false; addUsage(usage, reported);
+    void persistUsage();
   });
   const timer = setTimeout(() => { timedOut = true; session.agent.abort(); }, Math.max(1, input.timeoutMs - (Date.now() - started)));
   const abort = () => session.agent.abort(); input.signal?.addEventListener("abort", abort, { once: true });
@@ -164,6 +178,7 @@ export async function runAgentSession(input: Pick<AgentReviewInput, "root" | "pr
     input.signal?.throwIfAborted();
     if (Date.now() - started >= input.timeoutMs) throw new TimeoutError();
     await session.prompt(JSON.stringify(input.prompt));
+    await checkpoint;
     input.signal?.throwIfAborted();
     if (timedOut) throw new TimeoutError();
     if (budgetError || usage.totalTokens + usage.unreportedTokens > budget || input.ledger && input.ledger.consumed > input.ledger.total) throw budgetError ?? new BudgetError();
@@ -182,10 +197,12 @@ export async function runAgentSession(input: Pick<AgentReviewInput, "root" | "pr
     if (reservedTokens) {
       input.ledger?.settle(reservedTokens, requestSent ? reservedTokens : 0);
       if (requestSent) usage.unreportedTokens += reservedTokens;
+      void persistUsage();
     }
     clearTimeout(timer);
     input.signal?.removeEventListener("abort", abort);
     session.dispose();
+    await checkpoint.catch(() => undefined);
   }
 }
 

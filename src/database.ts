@@ -2,15 +2,17 @@ import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Pool, type PoolClient } from "pg";
-import type { Finding, ReplyResult, ReviewJob, StoredFinding } from "./types.js";
+import type { AgentJob, Finding, HealthJob, HealthReport, ReplyResult, ReviewJob, StoredFinding } from "./types.js";
 import type { DecisionProposal } from "./types.js";
 import { createHash } from "node:crypto";
 import { findingIdentity } from "./finding.js";
+import { addUsage, emptyUsage, type AgentUsage } from "./review.js";
 
 export interface JobAcceptor {
   accept(input: Omit<ReviewJob, "id" | "status">, meta: { event: string; action: string; merged?: boolean; mergeCommitSha?: string | null }): Promise<{ kind: "accepted" | "duplicate" | "full"; job?: ReviewJob }>;
   acceptReply?(input: ReviewReplyInput): Promise<{ kind: "accepted" | "duplicate" | "ignored"; job?: ReviewJob }>;
   cancelReview?(repositoryId: number, prNumber: number): void;
+  revokeInstallation?(input: { deliveryId: string; event: string; action: string; installationId: number; repositoryIds?: number[] }): Promise<{ duplicate: boolean }>;
 }
 
 export interface ReviewReplyInput {
@@ -20,7 +22,7 @@ export interface ReviewReplyInput {
 
 export class Database implements JobAcceptor {
   readonly pool: Pool;
-  private activeReviews = new Map<string, { job: ReviewJob; controller: AbortController }>();
+  private activeReviews = new Map<string, { job: AgentJob; controller: AbortController }>();
   private stopping = false;
 
   constructor(url: string) { this.pool = new Pool({ connectionString: url, max: 5, connectionTimeoutMillis: 3000 }); }
@@ -57,7 +59,7 @@ export class Database implements JobAcceptor {
       if (!delivery.rowCount) {
         const existing = await client.query("SELECT * FROM jobs WHERE delivery_id=$1 ORDER BY created_at DESC LIMIT 1", [input.deliveryId]);
         await client.query("COMMIT");
-        return { kind: "duplicate" as const, job: existing.rows[0] ? rowToJob(existing.rows[0]) : undefined };
+        return { kind: "duplicate" as const, job: existing.rows[0] ? rowToJob(existing.rows[0]) as ReviewJob : undefined };
       }
       await client.query("INSERT INTO repositories(id,installation_id,full_name) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET installation_id=EXCLUDED.installation_id,full_name=EXCLUDED.full_name,updated_at=now()", [input.repositoryId, input.installationId, input.repository]);
       const repository = await client.query("SELECT enabled FROM repositories WHERE id=$1", [input.repositoryId]);
@@ -75,7 +77,7 @@ export class Database implements JobAcceptor {
       const inserted = await client.query("INSERT INTO jobs(id,delivery_id,job_type,repository_id,installation_id,repository,pr_number,target_sha,base_sha,payload,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'queued') ON CONFLICT DO NOTHING RETURNING *", [id, input.deliveryId, jobType, input.repositoryId, input.installationId, input.repository, input.prNumber, targetSha, input.baseSha, { title: input.title, body: input.body, cloneUrl: input.cloneUrl, originalHeadSha: input.headSha }]);
       const row = inserted.rows[0] ?? (await client.query("SELECT * FROM jobs WHERE repository_id=$1 AND pr_number=$2 AND target_sha=$3 AND job_type=$4 ORDER BY created_at DESC LIMIT 1", [input.repositoryId, input.prNumber, targetSha, jobType])).rows[0];
       await client.query("COMMIT");
-      return { kind: inserted.rowCount ? "accepted" as const : "duplicate" as const, job: rowToJob(row) };
+      return { kind: inserted.rowCount ? "accepted" as const : "duplicate" as const, job: rowToJob(row) as ReviewJob };
     } catch (error) { await client.query("ROLLBACK"); throw error; }
     finally { client.release(); }
   }
@@ -85,23 +87,39 @@ export class Database implements JobAcceptor {
     return result.rows[0] ? rowToJob(result.rows[0]) : undefined;
   }
 
-  registerReviewAbort(job: ReviewJob, controller: AbortController) {
+  registerReviewAbort(job: AgentJob, controller: AbortController) {
     if (this.stopping) controller.abort("cancelled");
     else this.activeReviews.set(job.id, { job, controller });
   }
 
-  unregisterReviewAbort(job: ReviewJob) {
+  unregisterReviewAbort(job: AgentJob) {
     this.activeReviews.delete(job.id);
   }
 
   private abortReviews(repositoryId: number, prNumber: number, exceptHead?: string, reason = "superseded") {
-    for (const { job, controller } of this.activeReviews.values()) if (job.repositoryId === repositoryId && job.prNumber === prNumber && job.headSha !== exceptHead) controller.abort(reason);
+    for (const { job, controller } of this.activeReviews.values()) if (job.jobType !== "HEALTH_AUDIT" && job.repositoryId === repositoryId && job.prNumber === prNumber && job.headSha !== exceptHead) controller.abort(reason);
   }
 
   cancelReview(repositoryId: number, prNumber: number) { this.abortReviews(repositoryId, prNumber, undefined, "cancelled"); }
 
   cancelRepository(repositoryId: number) {
     for (const { job, controller } of this.activeReviews.values()) if (job.repositoryId === repositoryId) controller.abort("cancelled");
+  }
+
+  async revokeInstallation(input: { deliveryId: string; event: string; action: string; installationId: number; repositoryIds?: number[] }) {
+    const client = await this.pool.connect();
+    try {
+      const result = await transaction(client, async () => {
+        const delivery = await client.query("INSERT INTO webhook_deliveries(delivery_id,event,action,installation_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING delivery_id", [input.deliveryId, input.event, input.action, input.installationId]);
+        if (!delivery.rowCount) return { duplicate: true, repositories: [] as number[] };
+        const rows = (await client.query("UPDATE repositories SET enabled=false,updated_at=now() WHERE installation_id=$1 AND ($2::bigint[] IS NULL OR id=ANY($2::bigint[])) RETURNING id", [input.installationId, input.repositoryIds ?? null])).rows;
+        const repositories = rows.map((row) => Number(row.id));
+        await client.query("UPDATE jobs SET status='cancelled',last_error='GitHub App 授权已撤销',finished_at=now(),updated_at=now() WHERE repository_id=ANY($1::bigint[]) AND (status='queued' OR status='running' AND job_type IN ('PR_REVIEW','REPLY_HANDLE','HEALTH_AUDIT'))", [repositories]);
+        return { duplicate: false, repositories };
+      });
+      for (const repositoryId of result.repositories) this.cancelRepository(repositoryId);
+      return { duplicate: result.duplicate };
+    } finally { client.release(); }
   }
 
   stopReviews() {
@@ -115,11 +133,11 @@ export class Database implements JobAcceptor {
     return result.rowCount ?? 0;
   }
 
-  async claimNext(): Promise<ReviewJob | undefined> {
+  async claimNext(): Promise<AgentJob | undefined> {
     const client = await this.pool.connect();
     try {
       return await transaction(client, async () => {
-        const result = await client.query("SELECT * FROM jobs WHERE status='queued' AND (next_run_at IS NULL OR next_run_at<=now()) ORDER BY COALESCE((payload->>'humanReplyCreatedAt')::timestamptz,created_at),COALESCE((payload->>'sourceCommentId')::bigint,0),created_at FOR UPDATE SKIP LOCKED LIMIT 1");
+        const result = await client.query("SELECT * FROM jobs WHERE status='queued' AND (next_run_at IS NULL OR next_run_at<=now()) ORDER BY (job_type='HEALTH_AUDIT'),COALESCE((payload->>'humanReplyCreatedAt')::timestamptz,created_at),COALESCE((payload->>'sourceCommentId')::bigint,0),created_at FOR UPDATE SKIP LOCKED LIMIT 1");
         if (!result.rows[0]) return undefined;
         const updated = await client.query("UPDATE jobs SET status='running',attempt=attempt+1,started_at=now(),updated_at=now() WHERE id=$1 RETURNING *", [result.rows[0].id]);
         return rowToJob(updated.rows[0]);
@@ -127,17 +145,17 @@ export class Database implements JobAcceptor {
     } finally { client.release(); }
   }
 
-  async finishJob(job: ReviewJob) {
+  async finishJob(job: AgentJob) {
     if (job.status === "queued") return;
     const status = job.status === "running" ? "succeeded" : job.status;
-    await this.pool.query("UPDATE jobs SET status=$2,last_error=$3,finished_at=now(),updated_at=now() WHERE id=$1", [job.id, status, status === "succeeded" ? null : job.error ?? null]);
+    await this.pool.query("UPDATE jobs SET status=$2,last_error=$3,finished_at=now(),updated_at=now() WHERE id=$1 AND status NOT IN ('cancelled','superseded')", [job.id, status, status === "succeeded" ? null : job.error ?? null]);
   }
 
-  async failJob(job: ReviewJob, error: Error, retry: boolean) {
+  async failJob(job: AgentJob, error: Error, retry: boolean) {
     const delay = Math.min(3600, (error as Error & { retryAfterSeconds?: number }).retryAfterSeconds ?? 2 ** Math.max(0, (job.attempt ?? 1) - 1));
     const status = job.status === "uncertain" ? "uncertain" : retry && (job.attempt ?? 1) < 3 ? "queued" : job.status === "timeout" ? "timeout" : "failed";
-    await this.pool.query("UPDATE jobs SET status=$2,last_error=$3,next_run_at=CASE WHEN $2='queued' THEN now()+($4 || ' seconds')::interval ELSE NULL END,finished_at=CASE WHEN $2='queued' THEN NULL ELSE now() END,updated_at=now() WHERE id=$1", [job.id, status, error.message, delay]);
-    job.status = status;
+    const updated = await this.pool.query("UPDATE jobs SET status=$2,last_error=$3,next_run_at=CASE WHEN $2='queued' THEN now()+($4 || ' seconds')::interval ELSE NULL END,finished_at=CASE WHEN $2='queued' THEN NULL ELSE now() END,updated_at=now() WHERE id=$1 AND status NOT IN ('cancelled','superseded') RETURNING status", [job.id, status, error.message, delay]);
+    job.status = updated.rows[0]?.status ?? (await this.getJob(job.id))?.status ?? status;
   }
 
   async beginPublication(job: ReviewJob, fingerprint: string) {
@@ -152,6 +170,96 @@ export class Database implements JobAcceptor {
   async isRepositoryEnabled(repositoryId: number) {
     const result = await this.pool.query("SELECT enabled FROM repositories WHERE id=$1", [repositoryId]);
     return result.rows[0]?.enabled === true;
+  }
+
+  async activeHealthJob(repositoryId: number) {
+    const result = await this.pool.query("SELECT * FROM jobs WHERE repository_id=$1 AND job_type='HEALTH_AUDIT' AND status IN ('queued','running') LIMIT 1", [repositoryId]);
+    return result.rows[0] ? rowToJob(result.rows[0]) as HealthJob : undefined;
+  }
+
+  async enqueueHealth(repositoryId: number, snapshot: { defaultBranch: string; headSha: string }, trigger: HealthJob["trigger"], now = new Date(), scheduledFor?: string) {
+    if (!/^[a-f0-9]{40}$/i.test(snapshot.headSha) || !snapshot.defaultBranch || snapshot.defaultBranch.length > 255) throw new Error("健康快照无效");
+    const client = await this.pool.connect();
+    try {
+      return await transaction(client, async () => {
+        const repository = (await client.query("SELECT * FROM repositories WHERE id=$1 FOR UPDATE", [repositoryId])).rows[0];
+        if (!repository?.enabled || this.stopping) return { kind: "ignored" as const };
+        if (trigger === "schedule") {
+          if (repository.health_schedule === "off" || !scheduledFor || !repository.health_next_run_at || new Date(repository.health_next_run_at).toISOString() !== scheduledFor || new Date(scheduledFor) > now) return { kind: "ignored" as const };
+          const next = new Date(now.getTime() + (repository.health_schedule === "daily" ? 1 : 7) * 86400_000);
+          await client.query("UPDATE repositories SET health_next_run_at=$2,health_last_error=NULL,updated_at=now() WHERE id=$1", [repositoryId, next]);
+        }
+        const prior = (await client.query("SELECT * FROM jobs WHERE repository_id=$1 AND job_type='HEALTH_AUDIT' AND status IN ('queued','running') LIMIT 1", [repositoryId])).rows[0];
+        if (prior) return { kind: "duplicate" as const, job: rowToJob(prior) as HealthJob };
+        const payload = {
+          title: "Health: " + snapshot.defaultBranch, defaultBranch: snapshot.defaultBranch, trigger, scheduledFor,
+          windowStart: new Date(now.getTime() - 30 * 86400_000).toISOString(), windowEnd: now.toISOString(),
+          scope: { includePaths: repository.include_paths, excludePaths: repository.exclude_paths, outputLanguage: repository.output_language, budgetTokens: repository.budget_tokens },
+        };
+        const row = (await client.query("INSERT INTO jobs(id,job_type,repository_id,installation_id,repository,target_sha,payload,status) VALUES($1,'HEALTH_AUDIT',$2,$3,$4,$5,$6,'queued') RETURNING *", [randomUUID(), repositoryId, repository.installation_id, repository.full_name, snapshot.headSha, payload])).rows[0];
+        return { kind: "accepted" as const, job: rowToJob(row) as HealthJob };
+      });
+    } finally { client.release(); }
+  }
+
+  async checkpointAgentUsage(id: string, usage: AgentUsage) {
+    await this.pool.query("UPDATE agent_runs SET usage=$2,usage_input_tokens=$3,usage_output_tokens=$4 WHERE id=$1", [id, usage, usage.input, usage.output]);
+  }
+
+  async setHealthSchedule(repositoryId: number, schedule: "off" | "daily" | "weekly", now = new Date()) {
+    if (!["off", "daily", "weekly"].includes(schedule)) throw new Error("健康调度配置无效");
+    const next = new Date(now.getTime() + (schedule === "daily" ? 1 : 7) * 86400_000);
+    const result = await this.pool.query("UPDATE repositories SET health_next_run_at=CASE WHEN $2='off' THEN NULL WHEN health_schedule<>$2 OR health_next_run_at IS NULL THEN $3 ELSE health_next_run_at END,health_schedule=$2,health_last_error=NULL,updated_at=now() WHERE id=$1 AND (enabled OR $2='off') RETURNING *", [repositoryId, schedule, next]);
+    return result.rows[0];
+  }
+
+  async retryHealth(job: HealthJob) {
+    const client = await this.pool.connect();
+    try {
+      return await transaction(client, async () => {
+        const repository = (await client.query("SELECT enabled FROM repositories WHERE id=$1 FOR UPDATE", [job.repositoryId])).rows[0];
+        if (!repository?.enabled || this.stopping) return { kind: "unavailable" as const };
+        const row = (await client.query("SELECT * FROM jobs WHERE id=$1 AND repository_id=$2 AND job_type='HEALTH_AUDIT' FOR UPDATE", [job.id, job.repositoryId])).rows[0];
+        if (!row || !["failed", "timeout", "cancelled"].includes(row.status) || (await client.query("SELECT 1 FROM health_reports WHERE job_id=$1", [job.id])).rowCount) return { kind: "unavailable" as const };
+        const active = (await client.query("SELECT * FROM jobs WHERE repository_id=$1 AND job_type='HEALTH_AUDIT' AND status IN ('queued','running') LIMIT 1", [job.repositoryId])).rows[0];
+        if (active) return { kind: "duplicate" as const, job: rowToJob(active) as HealthJob };
+        const spent = (await client.query("SELECT COALESCE(sum(COALESCE((usage->>'totalTokens')::bigint,0)+COALESCE((usage->>'unreportedTokens')::bigint,0)),0) spent FROM agent_runs WHERE job_id=$1 AND role='health_auditor'", [job.id])).rows[0].spent;
+        if (Number(spent) >= job.scope.budgetTokens) return { kind: "budget_exhausted" as const };
+        const updated = (await client.query("UPDATE jobs SET status='queued',next_run_at=now(),started_at=NULL,finished_at=NULL,last_error=NULL,updated_at=now() WHERE id=$1 RETURNING *", [job.id])).rows[0];
+        return { kind: "accepted" as const, job: rowToJob(updated) as HealthJob };
+      });
+    } finally { client.release(); }
+  }
+
+  async healthUsage(jobId: string): Promise<AgentUsage> {
+    const rows = (await this.pool.query("SELECT usage FROM agent_runs WHERE job_id=$1 AND role='health_auditor'", [jobId])).rows;
+    const usage = emptyUsage();
+    for (const row of rows) addUsage(usage, row.usage);
+    return usage;
+  }
+
+  async getHealthReport(jobId: string): Promise<HealthReport | undefined> {
+    return (await this.pool.query("SELECT report FROM health_reports WHERE job_id=$1", [jobId])).rows[0]?.report;
+  }
+
+  async finishHealthReport(job: HealthJob, report: HealthReport, signal?: AbortSignal) {
+    if (report.jobId !== job.id || report.repositoryId !== job.repositoryId || report.headSha !== job.headSha) throw new Error("健康报告归属无效");
+    const client = await this.pool.connect();
+    try {
+      return await transaction(client, async () => {
+        signal?.throwIfAborted();
+        const repository = (await client.query("SELECT enabled FROM repositories WHERE id=$1 FOR UPDATE", [job.repositoryId])).rows[0];
+        if (!repository?.enabled || this.stopping) return false;
+        const row = (await client.query("SELECT status FROM jobs WHERE id=$1 FOR UPDATE", [job.id])).rows[0];
+        if (!row || !["running", "succeeded", "partial"].includes(row.status)) return false;
+        signal?.throwIfAborted();
+        const saved = (await client.query("INSERT INTO health_reports(job_id,report) VALUES($1,$2) ON CONFLICT(job_id) DO UPDATE SET job_id=EXCLUDED.job_id RETURNING report", [job.id, report])).rows[0].report as HealthReport;
+        await client.query("UPDATE jobs SET status=$2,last_error=NULL,finished_at=now(),updated_at=now() WHERE id=$1", [job.id, saved.status]);
+        signal?.throwIfAborted();
+        job.status = saved.status;
+        return true;
+      });
+    } finally { client.release(); }
   }
 
   async getRepositoryConfig(repositoryId: number) {
@@ -213,20 +321,20 @@ export class Database implements JobAcceptor {
         const delivery = await client.query("INSERT INTO webhook_deliveries(delivery_id,event,action,repository_id,installation_id) VALUES($1,'pull_request_review_comment','created',$2,$3) ON CONFLICT DO NOTHING RETURNING delivery_id", [input.deliveryId, input.repositoryId, input.installationId]);
         if (!delivery.rowCount) {
           const existing = await client.query("SELECT * FROM jobs WHERE delivery_id=$1 LIMIT 1", [input.deliveryId]);
-          return { kind: "duplicate" as const, job: existing.rows[0] ? rowToJob(existing.rows[0]) : undefined };
+          return { kind: "duplicate" as const, job: existing.rows[0] ? rowToJob(existing.rows[0]) as ReviewJob : undefined };
         }
         const repository = await client.query("SELECT enabled FROM repositories WHERE id=$1 AND installation_id=$2", [input.repositoryId, input.installationId]);
         if (!repository.rows[0]?.enabled) return { kind: "ignored" as const };
         const prior = await client.query("SELECT job_id FROM reply_publications WHERE source_comment_id=$1", [input.sourceCommentId]);
         if (prior.rows[0]) {
           const existing = await client.query("SELECT * FROM jobs WHERE id=$1", [prior.rows[0].job_id]);
-          return { kind: "duplicate" as const, job: existing.rows[0] ? rowToJob(existing.rows[0]) : undefined };
+          return { kind: "duplicate" as const, job: existing.rows[0] ? rowToJob(existing.rows[0]) as ReviewJob : undefined };
         }
         const id = randomUUID();
         const payload = { findingId: finding.id, rootCommentId: input.rootCommentId, sourceCommentId: input.sourceCommentId, sourceCommentUrl: input.sourceCommentUrl, humanActorId: input.humanActorId, humanActorLogin: input.humanActorLogin, humanReplyBody: input.humanReplyBody, humanReplyCreatedAt, cloneUrl: `https://github.com/${input.repository}.git` };
         const inserted = await client.query("INSERT INTO jobs(id,delivery_id,job_type,repository_id,installation_id,repository,pr_number,target_sha,base_sha,payload,status) VALUES($1,$2,'REPLY_HANDLE',$3,$4,$5,$6,$7,$8,$9,'queued') RETURNING *", [id, input.deliveryId, input.repositoryId, input.installationId, input.repository, input.prNumber, input.eventHeadSha, input.baseSha, payload]);
         await client.query("INSERT INTO reply_publications(source_comment_id,job_id,finding_id,status) VALUES($1,$2,$3,'pending')", [input.sourceCommentId, id, finding.id]);
-        return { kind: "accepted" as const, job: rowToJob(inserted.rows[0]) };
+        return { kind: "accepted" as const, job: rowToJob(inserted.rows[0]) as ReviewJob };
       });
     } finally { client.release(); }
   }
@@ -298,8 +406,14 @@ export class Database implements JobAcceptor {
   }
 }
 
-function rowToJob(row: Record<string, unknown>): ReviewJob {
+function rowToJob(row: Record<string, unknown>): AgentJob {
   const payload = row.payload as Record<string, any>;
+  if (row.job_type === "HEALTH_AUDIT") return {
+    id: String(row.id), jobType: "HEALTH_AUDIT", installationId: Number(row.installation_id), repositoryId: Number(row.repository_id), repository: String(row.repository),
+    cloneUrl: `https://github.com/${row.repository}.git`, title: payload.title, headSha: String(row.target_sha), status: row.status as HealthJob["status"],
+    error: row.last_error ? String(row.last_error) : undefined, attempt: Number(row.attempt), defaultBranch: payload.defaultBranch,
+    windowStart: payload.windowStart, windowEnd: payload.windowEnd, trigger: payload.trigger, scheduledFor: payload.scheduledFor, scope: payload.scope,
+  };
   return {
     id: String(row.id), deliveryId: String(row.delivery_id), jobType: row.job_type as ReviewJob["jobType"], installationId: Number(row.installation_id), repositoryId: Number(row.repository_id), repository: String(row.repository),
     cloneUrl: payload.cloneUrl ?? `https://github.com/${row.repository}.git`, prNumber: Number(row.pr_number), title: payload.title ?? "", body: payload.body ?? "", baseSha: String(row.base_sha), headSha: String(row.target_sha),

@@ -2,11 +2,13 @@
 
 本文件适用于整个项目。
 
+用户明确要求本项目不使用 Supie 相关技能或审批流程。按当前任务清单直接实现与验证，不额外设置原型或技术方案批准关卡。
+
 ## 授权范围与当前阶段
 
 先确认本次用户授权。规划、评审或文档请求不自动授权业务实现或真实 GitHub 写操作。已经明确的决定直接落实；只有需求冲突或必须由用户选择的重大新取舍才停止说明。
 
-当前在进行 **M2：Reply Handler 与 selective multi-agent review**。M0、M1 的历史完成证据保留，M2 的实际验收状态以 [M2 清单](docs/tasks/M2.md) 为准。不要依据旧阶段的“未实现”描述回退已有能力。
+当前按用户授权推进 **M3：Health Auditor、手动／定时健康检查与报告趋势**，实际进度以 [M3 清单](docs/tasks/M3.md) 为准。M0、M1 的历史完成证据保留；M2 的人工增益确认仍以 [M2 清单](docs/tasks/M2.md) 为准，进入 M3 不代表 M2 已验收完成。不要依据旧阶段的“未实现”描述回退已有能力。
 
 产品闭环：
 
@@ -17,7 +19,7 @@ PR Review → PR Merge → Decision Extraction → Maintainer Confirm
 
 M2 增加 own-thread Reply Handler、按复杂度触发的 Main / Specialist、预算与取消传播、Discussions 和 Agent runs 详情。
 
-不提前实现 M3 Health Auditor、定时健康检查、Repository Curator、自动源码修改、自动修复/commit/push/merge、Redis/BullMQ、多 Worker 或通用工作流平台。这里的只读约束针对产品内分析 Agent；开发本服务仍应运行构建和测试。
+M3 的产品范围见 [PRD-MVP 的 F06](docs/PRD-MVP.md#f06仓库健康检查与报告m3)。不扩展 Repository Curator、自动源码修改、自动修复/commit/push/merge、Redis/BullMQ、多 Worker 或通用工作流平台。这里的只读约束针对产品内分析 Agent；开发本服务仍应运行构建和测试。
 
 ## 文档入口与开工顺序
 
@@ -29,7 +31,8 @@ M2 增加 own-thread Reply Handler、按复杂度触发的 Main / Specialist、�
 | 内容 | 入口 |
 | --- | --- |
 | 产品与阶段范围 | [PRD-MVP](docs/PRD-MVP.md) |
-| M2 当前任务和证据 | [M2](docs/tasks/M2.md) |
+| M3 当前任务和证据 | [M3](docs/tasks/M3.md) |
+| M2 实现证据与待确认验收 | [M2](docs/tasks/M2.md) |
 | 历史验收 | [M0](docs/tasks/M0.md)、[M1](docs/tasks/M1.md) |
 | Agent / Session / Tools / 输出 | [architecture](docs/architecture.md) |
 | GitHub 接入和发布 | [github-integration](docs/github-integration.md) |
@@ -49,7 +52,7 @@ M2 增加 own-thread Reply Handler、按复杂度触发的 Main / Specialist、�
 - PostgreSQL 保存 delivery、Job、finding、publication、Memory 与 agent run；一个 Worker 串行领取 Job。
 - 重复 delivery、相同 PR/head 的自动 Review 和相同 source comment 不得产生重复有效发布。
 - Reply 执行时重读当前 head；按 GitHub 创建时间处理已接收的回复，迟到的旧回复不能回退新状态。
-- Draft、closed、仓库暂停、新 head 和服务停止必须阻止过期结果发布，并取消对应活动会话。
+- PR 的 Draft、closed、新 head，以及仓库暂停和服务停止，必须阻止过期 PR 结果发布，并取消对应活动会话。M3 健康任务的固定快照与取消规则见 F06。
 - 发布状态不确定时保留 `uncertain`，先核对远端，不能盲目重发。Review 已创建但线程绑定失败时，保留 published 并显式标记绑定不完整。
 - 不承诺 exactly-once 或多实例一致性。
 
@@ -57,7 +60,7 @@ M2 增加 own-thread Reply Handler、按复杂度触发的 Main / Specialist、�
 
 ## 固定快照与只读边界
 
-每次分析绑定 repository、PR、base SHA 和 head SHA。服务创建和回收 Job Workspace，模型不能选择 cwd 或 checkout 目标。
+PR 分析绑定 repository、PR、base SHA 和 head SHA；M3 健康分析绑定 repository、默认分支、commit SHA 和数据窗口。服务创建和回收 Job Workspace，模型不能选择 cwd 或 checkout 目标。
 
 - 普通分支 PR 优先；当前 fork PR 明确不支持。
 - 路径规范化和符号链接解析后都不能越界，不能访问宿主机凭据或其他 Job。
@@ -82,9 +85,9 @@ M2 增加 own-thread Reply Handler、按复杂度触发的 Main / Specialist、�
 
 身份字段和 finding ID 由服务生成；模型结果必须经过结构、路径、行号、Memory ID/version 和归属校验。
 
-可定位 finding 发布为 inline comment；不能映射到 diff 时降级到 summary。发布固定 `COMMENT` 和目标 `commit_id`，不允许 APPROVE、REQUEST_CHANGES、自动 resolve thread 或源码修改。
+PR Review 的可定位 finding 发布为 inline comment；不能映射到 diff 时降级到 summary。PR 发布固定 `COMMENT` 和目标 `commit_id`，不允许 APPROVE、REQUEST_CHANGES、自动 resolve thread 或源码修改。M3 报告保存在服务与管理页。
 
-发布前重新确认授权、enabled、open、非 Draft 和当前 head。Reply 如果遇到新 head，重排同一 source comment，不发布旧分析。
+PR 结果发布前重新确认授权、enabled、open、非 Draft 和当前 head。Reply 如果遇到新 head，重排同一 source comment，不发布旧分析。
 
 Reply 的 FIXED、MISJUDGMENT、VALID_EXCEPTION、STILL_VALID、NEEDS_CLARIFICATION 只改变 finding 状态或形成 decision clue。Clue 不直接改变 ACTIVE Memory；后续仍需 Decision Extractor 与维护者确认。
 

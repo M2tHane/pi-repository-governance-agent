@@ -30,8 +30,8 @@ Pi 只负责收到确定任务后的推理和工具调用。
 | Metadata | Read | 仓库基础信息 |
 | Contents | Read | 获取源码与提交 |
 | Pull requests | Read & Write | 读取 PR、发布 COMMENT Review、后续线程回复 |
-| Actions / Checks | 默认不申请 | M3 如需读取 CI / Check 再补只读权限 |
-| Security alerts | 默认不申请 | M3 如需读取现有安全扫描结果再评估 |
+| Actions / Checks | 不扩大现有授权 | M3 在现有权限下尝试读取；权限不足与无记录分开展示 |
+| Security alerts | 默认不申请 | M3 首版不接入完整安全扫描，不能由依赖清单推导“无漏洞” |
 | Contents Write | 不申请 | 当前无代码写入需求 |
 
 服务端固定发布 COMMENT，不让模型选择 APPROVE、REQUEST_CHANGES 或 merge。
@@ -98,9 +98,13 @@ GitHub 要求 Webhook 在 10 秒内返回 2XX；项目试用目标为 P95 < 3 �
 | `pull_request.closed` | `merged=true` | Decision Extractor | M1 |
 | `pull_request.closed` | `merged=false` | 仅关闭相关任务 | M1 |
 | 定时 / 手动检查 | 仓库启用且操作已授权 | Health Auditor | M3 |
-| App 停用 / 卸载 / 移除仓库 | 更新接入状态并停止任务 | 确定性状态处理 | M1 |
+| `installation.deleted/suspend`、`installation_repositories.removed` | 验签、校验 installation 与已登记仓库归属、停用并取消审查 | 确定性状态处理 | M3 |
 
 一级事件类型和 action 由代码明确处理，不由 LLM 决定。
+
+撤销事件保存为 installation 级 delivery，repository_id 可以为空。重复 delivery 不重复处理；removed 只作用于该 installation 的指定仓库，不注册新仓库。已取消／被替代的 Job 不会被迟到的完成或重试回写恢复为可执行状态。
+
+M3 的 Health 先读取 repository metadata 和默认分支 commit，随后固定该 SHA。CI 读取 commit check-runs 与默认分支窗口内 workflow-runs 的第一页；目标 SHA 与其他历史 SHA 分开保存。采集只用结构化元数据，不下载日志或 artifact，也不执行仓库测试／扫描脚本。来源需有当前仓库内的 GitHub 链接、有效 SHA 和时间；窗口外、未完成、权限不足、无记录、结构错误和截断均显式记录。
 
 ## 6. PR Review 上下文
 

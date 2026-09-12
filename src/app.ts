@@ -60,6 +60,19 @@ export function createApp(config: Config, target: JobAcceptor | ((job: ReviewJob
     if (!verifySignature(body, signature, config.webhookSecret)) return send(response, 401, { error: "签名无效" });
     let payload: unknown;
     try { payload = JSON.parse(body.toString("utf8")); } catch { return send(response, 400, { error: "JSON 无效" }); }
+    if (eventName === "installation" || eventName === "installation_repositories") {
+      const raw = payload as any;
+      const revoke = eventName === "installation" ? ["deleted", "suspend"].includes(raw?.action) : raw?.action === "removed";
+      if (!revoke || typeof target === "function" || !target.revokeInstallation) return send(response, 200, { ignored: true });
+      if (!Number.isSafeInteger(raw?.installation?.id) || raw.installation.id <= 0) return send(response, 422, { error: "installation 无效" });
+      let repositoryIds: number[] | undefined;
+      if (eventName === "installation_repositories") {
+        if (!Array.isArray(raw.repositories_removed) || raw.repositories_removed.length > 1000 || raw.repositories_removed.some((repository: any) => !Number.isSafeInteger(repository?.id) || repository.id <= 0)) return send(response, 422, { error: "repositories_removed 无效" });
+        repositoryIds = raw.repositories_removed.map((repository: { id: number }) => repository.id);
+      }
+      try { return send(response, 202, { revoked: true, ...await target.revokeInstallation({ deliveryId, event: eventName, action: raw.action, installationId: raw.installation.id, repositoryIds }) }); }
+      catch { return send(response, 503, { error: "撤销授权持久化失败" }); }
+    }
     if (eventName === "pull_request_review_comment") {
       if (typeof target === "function" || !("acceptReply" in target) || typeof target.acceptReply !== "function") return send(response, 200, { ignored: true });
       const raw = payload as any;

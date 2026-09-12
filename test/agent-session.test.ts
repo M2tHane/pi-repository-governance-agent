@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { BudgetError, emptyUsage, runAgentSession, TimeoutError, workspaceTools } from "../src/review.js";
+import { BudgetError, emptyUsage, runAgentSession, TimeoutError, workspaceTools, type AgentUsage } from "../src/review.js";
 import { BudgetLedger } from "../src/delegation.js";
 
 function fakeProvider(t: TestContext, respond: (context: any, options: any) => Promise<any>) {
@@ -37,6 +37,25 @@ function fakeProvider(t: TestContext, respond: (context: any, options: any) => P
 
 const base = { provider: "deepseek", modelName: "deepseek-v4-flash", apiKey: "test-key", timeoutMs: 5000, budgetTokens: 20_000, systemPrompt: "只读取当前文件，返回 JSON。", prompt: { task: "read sample.txt" } };
 const toolCall = { type: "toolCall", id: "call-1", name: "read_file", arguments: { path: "sample.txt" } };
+
+test("Provider 发送前持久化预留，结算后保存 usage；记账失败时不发送请求", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "pi-checkpoint-test-"));
+  const checkpoints: AgentUsage[] = [], sentAfterCheckpoint: boolean[] = [];
+  const requests = fakeProvider(t, async () => {
+    sentAfterCheckpoint.push(checkpoints.at(-1)?.unreportedTokens! > 0);
+    return { content: [{ type: "text", text: "{}" }], usage: { input: 100, output: 20, cacheRead: 30, totalTokens: 150 } };
+  });
+  try {
+    const input = { ...base, root, onUsage: async (usage: AgentUsage) => { await Promise.resolve(); checkpoints.push({ ...usage }); } };
+    await runAgentSession(input);
+    assert.deepEqual(sentAfterCheckpoint, [true]);
+    assert.equal(checkpoints.at(-1)?.totalTokens, 150);
+    assert.equal(checkpoints.at(-1)?.unreportedTokens, 0);
+    const failing = { ...input, onUsage: async () => { throw new Error("usage persistence failed"); } };
+    await assert.rejects(runAgentSession(failing), /usage persistence failed/);
+    assert.equal(requests(), 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test("真实 Pi 会话逐轮累计 usage、关闭仓库资源发现，独立会话不共享 messages", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "pi-session-test-"));

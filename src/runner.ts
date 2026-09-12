@@ -1,12 +1,12 @@
 import type { Database } from "./database.js";
-import type { ReviewJob } from "./types.js";
+import type { AgentJob } from "./types.js";
 
 export class PersistentRunner {
   private stopped = false;
   private timer?: NodeJS.Timeout;
   private running?: Promise<void>;
 
-  constructor(private database: Database, private execute: (job: ReviewJob) => Promise<void>, private pollMs = 500) {}
+  constructor(private database: Database, private execute: (job: AgentJob) => Promise<void>, private pollMs = 500) {}
 
   async start() {
     const recovered = await this.database.recoverRunning();
@@ -25,7 +25,7 @@ export class PersistentRunner {
         catch (error) {
           const failure = error instanceof Error ? error : new Error("未知错误");
           await this.database.failJob(job, failure, transient(failure));
-          console.error(JSON.stringify({ event: "job_failed", jobId: job.id, deliveryId: job.deliveryId, repositoryId: job.repositoryId, prNumber: job.prNumber, headSha: job.headSha, status: job.status, error: failure.message }));
+          console.error(JSON.stringify({ event: "job_failed", jobId: job.id, deliveryId: "deliveryId" in job ? job.deliveryId : undefined, repositoryId: job.repositoryId, prNumber: "prNumber" in job ? job.prNumber : undefined, headSha: job.headSha, status: job.status, error: failure.message }));
         }
       }
     } catch (error) { console.error(JSON.stringify({ event: "runner_error", error: error instanceof Error ? error.message : "未知错误" })); }

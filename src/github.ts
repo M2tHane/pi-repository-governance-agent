@@ -4,7 +4,7 @@ import type { ReviewJob } from "./types.js";
 const api = "https://api.github.com";
 
 export class GitHubApiError extends Error {
-  constructor(path: string, status: number, readonly retryAfterSeconds?: number) { super(`GitHub API ${path} 失败 (${status})`); }
+  constructor(path: string, readonly status: number, readonly retryAfterSeconds?: number) { super(`GitHub API ${path} 失败 (${status})`); }
 }
 
 function base64url(value: string | Buffer): string {
@@ -21,9 +21,11 @@ export class GitHubClient {
     return `${unsigned}.${base64url(signature)}`;
   }
 
-  async installationToken(installationId: number): Promise<string> {
+  async installationToken(installationId: number, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
     const response = await fetch(`${api}/app/installations/${installationId}/access_tokens`, {
       method: "POST",
+      signal,
       headers: { authorization: `Bearer ${this.jwt()}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" },
     });
     if (!response.ok) throw new Error(`GitHub installation 认证失败 (${response.status})`);
@@ -43,6 +45,24 @@ export class GitHubClient {
 
   getPullRequest(token: string, repository: string, number: number) {
     return this.request<{ number: number; title: string; body: string | null; state: string; draft: boolean; merged: boolean; merged_at: string | null; merge_commit_sha: string | null; base: { sha: string }; head: { sha: string } }>(token, `/repos/${repository}/pulls/${number}`);
+  }
+
+  async repositorySnapshot(token: string, repository: string, repositoryId: number, signal: AbortSignal) {
+    signal.throwIfAborted();
+    const info = await this.request<{ id: number; default_branch: string }>(token, `/repos/${repository}`, { signal });
+    if (info.id !== repositoryId || typeof info.default_branch !== "string" || !info.default_branch) throw new Error("仓库归属或默认分支无效");
+    const branch = await this.request<{ commit?: { sha?: string } }>(token, `/repos/${repository}/branches/${encodeURIComponent(info.default_branch)}`, { signal });
+    if (!branch.commit?.sha || !/^[a-f0-9]{40}$/i.test(branch.commit.sha)) throw new Error("默认分支没有可用提交");
+    return { defaultBranch: info.default_branch, headSha: branch.commit.sha };
+  }
+
+  healthChecks(token: string, repository: string, sha: string, signal: AbortSignal) {
+    return this.request<{ total_count: number; check_runs: Array<Record<string, any>> }>(token, `/repos/${repository}/commits/${sha}/check-runs?per_page=100`, { signal });
+  }
+
+  healthWorkflows(token: string, repository: string, branch: string, start: string, end: string, signal: AbortSignal) {
+    const params = new URLSearchParams({ branch, created: `${start}..${end}`, per_page: "100" });
+    return this.request<{ total_count: number; workflow_runs: Array<Record<string, any>> }>(token, `/repos/${repository}/actions/runs?${params}`, { signal });
   }
 
   private async pages<T>(token: string, path: string): Promise<T[]> {

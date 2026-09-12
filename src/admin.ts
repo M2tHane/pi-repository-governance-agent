@@ -6,9 +6,11 @@ import type { Config } from "./config.js";
 import type { Database } from "./database.js";
 import { GitHubClient } from "./github.js";
 import { MemoryService, type Actor, type CandidatePatch } from "./memory.js";
+import { compareHealthReports, HealthRequestError, requestHealthAudit } from "./health.js";
+import type { HealthReport } from "./types.js";
 
 type Session = Actor & { token: string; csrf: string; expiresAt: number };
-type Repository = { id: number; installationId: number; fullName: string; enabled: boolean; includePaths: string[]; excludePaths: string[]; outputLanguage: string; budgetTokens: number; reviewMode: "single" | "auto"; maxDelegates: number };
+type Repository = { id: number; installationId: number; fullName: string; enabled: boolean; includePaths: string[]; excludePaths: string[]; outputLanguage: string; budgetTokens: number; reviewMode: "single" | "auto"; maxDelegates: number; healthSchedule: "off" | "daily" | "weekly"; healthNextRunAt: string | null; healthLastError: string | null };
 
 function json(response: ServerResponse, status: number, value: unknown) {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }).end(JSON.stringify(value));
@@ -26,7 +28,7 @@ async function body(request: IncomingMessage) {
 }
 
 function repository(row: Record<string, unknown>): Repository {
-  return { id: Number(row.id), installationId: Number(row.installation_id), fullName: String(row.full_name), enabled: Boolean(row.enabled), includePaths: row.include_paths as string[], excludePaths: row.exclude_paths as string[], outputLanguage: String(row.output_language), budgetTokens: Number(row.budget_tokens), reviewMode: row.review_mode as "single" | "auto", maxDelegates: Number(row.max_delegates) };
+  return { id: Number(row.id), installationId: Number(row.installation_id), fullName: String(row.full_name), enabled: Boolean(row.enabled), includePaths: row.include_paths as string[], excludePaths: row.exclude_paths as string[], outputLanguage: String(row.output_language), budgetTokens: Number(row.budget_tokens), reviewMode: row.review_mode as "single" | "auto", maxDelegates: Number(row.max_delegates), healthSchedule: row.health_schedule as Repository["healthSchedule"], healthNextRunAt: row.health_next_run_at instanceof Date ? row.health_next_run_at.toISOString() : null, healthLastError: row.health_last_error ? String(row.health_last_error) : null };
 }
 
 export function createAdminHandler(config: Config, database: Database, github = new GitHubClient(config.appId, config.privateKey)) {
@@ -110,6 +112,59 @@ export function createAdminHandler(config: Config, database: Database, github = 
         if (!user) return json(response, 401, { error: "请先登录" });
         if (request.method !== "GET" && !requireCsrf(request, response, user)) return;
         if (request.method === "GET" && url.pathname === "/api/repositories") return json(response, 200, await allowedRepositories(user));
+        const healthAction = url.pathname.match(/^\/api\/repositories\/(\d+)\/(health|health-schedule)$/);
+        if (healthAction && (request.method === "POST" && healthAction[2] === "health" || request.method === "PATCH" && healthAction[2] === "health-schedule")) {
+          if (!Number.isSafeInteger(Number(healthAction[1])) || Number(healthAction[1]) <= 0) return json(response, 422, { error: "仓库标识无效" });
+          const access = await authorize(request, response, Number(healthAction[1])); if (!access) return;
+          if (!config.allowedRepositories.has(access.repository.fullName.toLowerCase())) return json(response, 403, { error: "仓库未授权" });
+          const value = await body(request);
+          if (!value || typeof value !== "object" || Array.isArray(value)) return json(response, 422, { error: "健康检查参数无效" });
+          if (healthAction[2] === "health-schedule") {
+            const schedule = (value as { schedule?: string }).schedule;
+            if (Object.keys(value).some((key) => key !== "schedule") || !["off", "daily", "weekly"].includes(schedule ?? "")) return json(response, 422, { error: "只支持关闭、每日或每周" });
+            const updated = await database.setHealthSchedule(access.repository.id, schedule as Repository["healthSchedule"]);
+            return updated ? json(response, 200, repository(updated)) : json(response, 409, { error: "仓库已暂停，无法启用定时检查" });
+          }
+          if (Object.keys(value).length) return json(response, 422, { error: "健康检查使用服务解析的默认分支，不接受自选 SHA 或窗口" });
+          return json(response, 202, await requestHealthAudit(config, database, github, access.repository.id));
+        }
+        if (request.method === "GET" && url.pathname === "/api/health") {
+          const requested = url.searchParams.get("repositoryId");
+          const page = Number(url.searchParams.get("page") ?? 0);
+          if (!Number.isSafeInteger(page) || page < 0 || page > 10000 || requested !== null && (!/^\d+$/.test(requested) || !Number.isSafeInteger(Number(requested)))) return json(response, 422, { error: "分页或仓库参数无效" });
+          let ids: number[];
+          if (requested !== null) {
+            const access = await authorize(request, response, Number(requested)); if (!access) return;
+            if (!config.allowedRepositories.has(access.repository.fullName.toLowerCase())) return json(response, 403, { error: "仓库未授权" });
+            ids = [access.repository.id];
+          } else ids = (await allowedRepositories(user)).filter((item) => config.allowedRepositories.has(item.fullName.toLowerCase())).map((item) => item.id);
+          const result = await database.pool.query("SELECT j.*,(h.job_id IS NOT NULL) has_report,h.report->'result'->>'summary' health_summary,COALESCE(jsonb_array_length(h.report->'result'->'findings'),0) finding_count FROM jobs j LEFT JOIN health_reports h ON h.job_id=j.id WHERE j.job_type='HEALTH_AUDIT' AND j.repository_id=ANY($1::bigint[]) ORDER BY j.created_at DESC,j.id DESC LIMIT 51 OFFSET $2", [ids, page * 50]);
+          return json(response, 200, { items: result.rows.slice(0, 50), nextPage: result.rows.length > 50 ? page + 1 : null });
+        }
+        const healthMatch = url.pathname.match(/^\/api\/health\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/(retry))?$/i);
+        if (healthMatch && (request.method === "GET" && !healthMatch[2] || request.method === "POST" && healthMatch[2] === "retry")) {
+          const found = (await database.pool.query("SELECT * FROM jobs WHERE id=$1 AND job_type='HEALTH_AUDIT'", [healthMatch[1]])).rows[0];
+          if (!found) return json(response, 404, { error: "健康任务不存在" });
+          const access = await authorize(request, response, Number(found.repository_id)); if (!access) return;
+          if (!config.allowedRepositories.has(access.repository.fullName.toLowerCase())) return json(response, 403, { error: "仓库未授权" });
+          if (healthMatch[2] === "retry") {
+            const value = await body(request);
+            if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length) return json(response, 422, { error: "重试沿用原快照与预算，不接受覆盖参数" });
+            const job = await database.getJob(healthMatch[1]!);
+            if (!job || job.jobType !== "HEALTH_AUDIT") return json(response, 404, { error: "健康任务不存在" });
+            const result = await database.retryHealth(job);
+            if (result.kind === "budget_exhausted") return json(response, 409, { error: "本任务累计 Token 预算已耗尽；需要时可发起新的检查" });
+            return result.kind === "unavailable" ? json(response, 409, { error: "任务已有报告、仍在执行或仓库已暂停，不能重试" }) : json(response, 202, result);
+          }
+          const report = await database.getHealthReport(healthMatch[1]!);
+          let previous: HealthReport | undefined;
+          if (report) {
+            const rows = (await database.pool.query("SELECT h.report FROM health_reports h JOIN jobs j ON j.id=h.job_id WHERE j.repository_id=$1 AND h.job_id<>$2 AND h.created_at<=(SELECT created_at FROM health_reports WHERE job_id=$2) ORDER BY (h.report->>'comparisonKey'=$3) DESC,h.created_at DESC LIMIT 20", [found.repository_id, healthMatch[1], report.comparisonKey])).rows;
+            const candidates = rows.map((row) => row.report as HealthReport);
+            previous = candidates.find((candidate) => compareHealthReports(report, candidate).dimensions.some((dimension) => dimension.comparable)) ?? candidates[0];
+          }
+          return json(response, 200, { job: found, report: report ?? null, usage: await database.healthUsage(healthMatch[1]!), previous: previous ? { jobId: previous.jobId, headSha: previous.headSha, completedAt: previous.completedAt } : null, comparison: report ? compareHealthReports(report, previous) : null });
+        }
         const repositoryMatch = url.pathname.match(/^\/api\/repositories\/(\d+)$/);
         if (repositoryMatch && request.method === "PATCH") {
           const access = await authorize(request, response, Number(repositoryMatch[1])); if (!access) return;
@@ -173,6 +228,10 @@ export function createAdminHandler(config: Config, database: Database, github = 
         return;
       }
       json(response, 404, { error: "not found" });
-    } catch (error) { json(response, 500, { error: error instanceof Error ? error.message : "请求失败" }); }
+    } catch (error) {
+      if (error instanceof HealthRequestError) return json(response, error.status, { error: error.message });
+      if (error instanceof SyntaxError) return json(response, 400, { error: "JSON 无效" });
+      json(response, 500, { error: error instanceof Error ? error.message : "请求失败" });
+    }
   };
 }

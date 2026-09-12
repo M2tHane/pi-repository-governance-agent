@@ -1,10 +1,12 @@
 # Pi Repository Governance Agent — Architecture
 
-版本：v0.2｜日期：2026-09-11
+版本：v0.3｜日期：2026-09-12
 
 > 本文描述系统架构、Agent 分层、工具与副作用边界、输出契约和技术选型。产品范围见 [PRD-MVP.md](./PRD-MVP.md)。
 
-当前 M2 沿用一个 Node 服务、一个 PostgreSQL Worker 和固定 SHA Workspace。真实验收状态见 [M2](./tasks/M2.md)，取舍见 [M2 Note](../.agents/notes/proposed/architecture/2026-09-11-m2-reply-and-multi-agent.md)。图中的 M3 节点仅表示后续范围。
+服务沿用一个 Node 进程、一个 PostgreSQL Worker 和固定 SHA Workspace。M2 的独立验收见 [M2](./tasks/M2.md)，M3 的实现与验证见 [M3](./tasks/M3.md)。M2 取舍见 [线程与多 Agent Note](../.agents/notes/proposed/architecture/2026-09-11-m2-reply-and-multi-agent.md)。
+
+M3 的仓库级任务、报告、调度和持久预算取舍见 [Health Auditor Note](../.agents/notes/implemented/architecture/2026-09-12-m3-health-auditor.md)。
 
 ## 1. 架构原则
 
@@ -68,8 +70,7 @@ flowchart TB
     RUNNER --> HEALTH
     RUNNER --> MAIN
     MAIN --> REVIEW
-    MAIN --> HEALTH
-    REVIEW -. 按需委派 .-> SPECIAL
+    MAIN -. 按需委派 .-> SPECIAL
     AGENTS -->|受限只读工具| WS
     AGENTS <--> MEMORY
     AGENTS <--> LLM
@@ -183,7 +184,7 @@ Main 不重复完整审查，最终返回 summary 与候选 key 分组。服务�
 
 | 能力 | 实施方式 | 是否暴露给分析 Agent |
 | --- | --- | --- |
-| read_file / search_text | 绑定当前 Workspace 的只读文件工具 | Review / Reply / Specialist |
+| read_file / search_text | 绑定当前 Workspace 的只读文件工具；Health 额外限定选定文件与返回行数 | Review / Reply / Specialist / Health |
 | git_diff / git_log / git_blame | 有真实需要后再实现 | 当前未注册 |
 | PR / diff / thread 读取 | 服务准备绑定 Job 的上下文 | 通过输入上下文提供 |
 | Memory 检索 | 服务端附加仓库、Scope 和状态过滤 | 通过输入上下文提供 |
@@ -241,13 +242,29 @@ Main 不重复完整审查，最终返回 summary 与候选 key 分组。服务�
 
 ### 8.4 HealthReport
 
-包含：
+`HEALTH_AUDIT` 是仓库级 Job，`pr_number`、`base_sha`、`delivery_id` 均为空，不进入 Review publication 或 Reply 状态机。服务在创建任务时固定默认分支 SHA、30 天窗口和路径／语言／预算配置；重试保持这些值。
 
-- 仓库固定快照。
-- 数据时间窗口。
-- 各维度 findings。
-- 缺失数据。
-- limitations。
+报告结构见 [HealthReport 类型](../src/types.ts)，执行与校验入口见 [health.ts](../src/health.ts)。报告包含 Job／仓库／SHA、窗口、采集／完成时间、实际 Scope、模型／usage／耗时、各维度 findings、实际读取行数、提供的 Memory 版本、CI 来源、missingData、limitations 和可比性指纹。
+
+模型只输出 summary、findings 与 limitations。finding 的身份、报告归属、覆盖统计、来源链接与状态由服务生成。代码引用必须指向工具实际返回过的行，CI 与 Memory 引用必须属于本次输入。没有有效结构化结果时失败；数据或覆盖不完整时保存 partial。报告与 Job 终态在同一事务提交，重复保存以首次报告为准。
+
+Health 独立使用一个 Session。默认分支后续更新不取消固定旧 SHA 的历史检查；暂停、授权撤销、服务停止及总时限会取消它。GitHub 读取、Git 和文件工具均接收同一取消信号。当前总时限最多 120 秒；单 Worker 不抢占正在执行的健康任务。
+
+定时配置为 off / daily / weekly，默认 off；进程每 30 秒检查到期仓库。数据库仓库行锁与活动任务唯一索引合并重复触发；定时游标与入队在同一事务推进，停机漏过的多个周期只触发一次当前检查。无法建立快照时记录仓库级错误并推进到下一周期，用户可以手动重试。
+
+趋势按相同仓库、范围、采样／检查版本、模型、窗口长度与 Memory 版本筛选；每个维度再检查数据完整性。只展示观察数量和严重度分布，不自动认定问题已修复。管理 API 从最近 20 个优先匹配相同指纹的历史候选中选择可比较报告。
+
+管理 API 沿用 OAuth / CSRF 与仓库维护权限：
+
+| 请求 | 输入与结果 |
+| --- | --- |
+| `POST /api/repositories/:id/health` | 空对象；返回 202 与新建／已有活动 Job，不接受自选 SHA 或窗口。 |
+| `PATCH /api/repositories/:id/health-schedule` | `schedule=off/daily/weekly`；返回仓库配置和下次执行时间。 |
+| `GET /api/health?repositoryId=:id&page=0` | 按仓库筛选，每页最多 50 项任务摘要和下一页编号。 |
+| `GET /api/health/:jobId` | Job、报告、累计 usage、上次报告标识与各维度比较；报告未生成时为 null。 |
+| `POST /api/health/:jobId/retry` | 空对象；仅重排无报告且已失败／超时／取消的任务，保留原快照和剩余预算；冲突或额度耗尽返回 409。 |
+
+这些入口都不创建 GitHub 评论、Issue 或源码提交，也不激活 Memory。
 
 ## 9. 结果校验
 
