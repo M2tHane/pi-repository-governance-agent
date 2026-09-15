@@ -12,6 +12,7 @@ import { execFileSync } from "node:child_process";
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { emptyUsage } from "../src/review.js";
+import { groupFindings } from "../src/presentation.js";
 import { GitHubApiError } from "../src/github.js";
 import { createApp } from "../src/app.js";
 
@@ -446,14 +447,27 @@ test("Memory 生命周期、版本、幂等和 Scope/仓库隔离", { skip: !dat
     const edited = await service.edit(repositoryId, id, { content: "Public DTO fields never use Optional" }, actor);
     assert.equal(edited.version, 2);
     assert.equal(edited.status, "CANDIDATE");
-    assert.equal((await service.retrieve(repositoryId, { paths: ["backend/a/dto/X.java"], text: "Optional DTO" })).length, 0);
+    assert.equal((await service.retrieve(repositoryId, { paths: ["backend/a/dto/X.java"], text: "Optional DTO" }))[0]?.version, 1);
+    assert.equal((await service.list(repositoryId))[0]?.activeVersion, 1);
+    await service.transition(repositoryId, id, "reject", actor);
+    assert.equal((await service.get(repositoryId, id))?.version, 1);
+    assert.equal((await service.list(repositoryId, "ACTIVE"))[0]?.version, 1);
+    const nextEdit = await service.edit(repositoryId, id, { content: "DTO fields use ordinary nullable values" }, actor);
+    assert.equal(nextEdit.version, 3);
     assert.equal((await service.transition(repositoryId, id, "approve", actor)).status, "ACTIVE");
     const versions = await database.pool.query("SELECT version,status FROM memories WHERE id=$1 ORDER BY version", [id]);
-    assert.deepEqual(versions.rows.map((row) => [row.version, row.status]), [[1, "SUPERSEDED"], [2, "ACTIVE"]]);
+    assert.deepEqual(versions.rows.map((row) => [row.version, row.status]), [[1, "SUPERSEDED"], [2, "REJECTED"], [3, "ACTIVE"]]);
     const second = await database.insertCandidates({ ...job, prNumber: 9, headSha: "merged-2" }, [{ ...proposal, title: "New DTO rule", content: "Use plain nullable DTO fields", source: { pullRequestNumber: 9, commitSha: "merged-2", commentIds: [11] } }]);
+    await service.transition(repositoryId, second[0]!, "approve", actor);
+    await service.edit(repositoryId, second[0]!, { content:"Use ordinary nullable fields for public DTOs" }, actor);
+    const exception = await database.insertCandidates({ ...job, prNumber:10, headSha:"merged-3" }, [{ ...proposal, type:"exception", content:"Scoped exception", relation:{exceptionTo:id}, source:{pullRequestNumber:10,commitSha:"merged-3",commentIds:[12]} }]);
+    await assert.rejects(service.supersede(repositoryId,id,exception[0]!,actor),/例外必须保留原规则/);
+    assert.equal((await service.get(repositoryId,id))?.status,"ACTIVE");
     assert.equal((await service.supersede(repositoryId, id, second[0]!, actor)).status, "ACTIVE");
+    assert.equal((await database.pool.query("SELECT count(*)::int count FROM memories WHERE id=$1 AND status='ACTIVE'",[second[0]])).rows[0].count,1);
     assert.equal((await service.get(repositoryId, id))?.status, "SUPERSEDED");
     assert.equal((await service.transition(repositoryId, second[0]!, "deprecate", actor)).status, "DEPRECATED");
+    assert.equal((await service.retrieve(repositoryId,{paths:["backend/a/dto/X.java"],text:"DTO"})).length,0);
   } finally {
     await database.pool.query("DELETE FROM memory_audits WHERE memory_id IN (SELECT id FROM memories WHERE repository_id=$1)", [repositoryId]);
     await database.pool.query("DELETE FROM memories WHERE repository_id=$1", [repositoryId]);
@@ -467,6 +481,8 @@ test("OAuth state、Session、CSRF 与跨仓库 Maintainer 权限", { skip: !dat
   const allowedId = 9_000_000_006;
   const deniedId = 9_000_000_007;
   const cleanup = async () => {
+    await database.pool.query("DELETE FROM reply_publications WHERE finding_id IN (SELECT id FROM review_findings WHERE repository_id=ANY($1::bigint[]))", [[allowedId, deniedId]]);
+    await database.pool.query("DELETE FROM review_findings WHERE repository_id=ANY($1::bigint[])", [[allowedId, deniedId]]);
     await database.pool.query("DELETE FROM jobs WHERE repository_id=ANY($1::bigint[])", [[allowedId, deniedId]]);
     await database.pool.query("DELETE FROM webhook_deliveries WHERE repository_id=ANY($1::bigint[])", [[allowedId, deniedId]]);
     await database.pool.query("DELETE FROM memory_audits WHERE memory_id IN (SELECT id FROM memories WHERE repository_id=ANY($1::bigint[]))", [[allowedId, deniedId]]);
@@ -479,8 +495,16 @@ test("OAuth state、Session、CSRF 与跨仓库 Maintainer 权限", { skip: !dat
   const makeJob = (repositoryId: number, repository: string, suffix: string) => ({ id: `00000000-0000-4000-8000-0000000000${suffix}`, deliveryId: `auth-${suffix}`, jobType: "DECISION_EXTRACT", installationId: 1, repositoryId, repository, cloneUrl: "url", prNumber: 1, title: "", body: "", baseSha: "base", headSha: "merged", status: "running" } satisfies ReviewJob);
   const allowedMemory = (await database.insertCandidates(makeJob(allowedId, "owner/allowed", "06"), [proposal]))[0]!;
   const deniedMemory = (await database.insertCandidates(makeJob(deniedId, "owner/denied", "07"), [{ ...proposal, source: { ...proposal.source, pullRequestNumber: 2 } }]))[0]!;
+  const { id: _id, status: _status, jobType: _type, ...reviewInput } = makeJob(allowedId, "owner/allowed", "08");
+  const review = (await database.accept(reviewInput, { event: "pull_request", action: "opened" })).job!;
+  const deniedReview = (await database.accept({ ...reviewInput, repositoryId: deniedId, repository: "owner/denied", deliveryId: "auth-denied-report" }, { event: "pull_request", action: "opened" })).job!;
+  const finding = { path:"src/a.ts",line:2,side:"RIGHT",category:"correctness",severity:"high",evidenceLevel:"strong",description:"shared mutation",evidence:"writes shared list",impact:"ordering changes",suggestion:"copy before sorting" } as const;
+  const grouped = groupFindings([finding,{...finding,path:"src/b.ts",description:"mutable list escapes"}],[[0,1]],[{title:"排序修改共享状态",reason:"查询返回内部列表。",fix:"查询返回快照并在副本上排序。"}]);
+  const stored = await database.saveFindings(review, grouped, new Set(grouped));
+  await database.saveReviewResult(review,{summary:"full audit retained",findings:stored,coverage:["private-audit-scope"],limitations:[]});
   const config = { appId: "1", privateKey: "key", webhookSecret: "secret", allowedRepositories: new Set(["owner/allowed", "owner/denied"]), databaseUrl: databaseUrl!, modelProvider: "test", modelName: "test", modelApiKey: "test", port: 0, webhookMaxBytes: 1000, queueCapacity: 1, agentTimeoutMs: 1000, githubClientId: "client", githubClientSecret: "client-secret", githubOAuthCallbackUrl: "http://127.0.0.1/callback", sessionSecret: "a".repeat(32) } satisfies Config;
-  const github = { exchangeOAuthCode: async () => "user-token", getUser: async () => ({ id: 42, login: "maintainer" }), hasMaintainerPermission: async (_token: string, repository: string) => repository === "owner/allowed" };
+  let hasAccess = true;
+  const github = { exchangeOAuthCode: async () => "user-token", getUser: async () => ({ id: 42, login: "maintainer" }), hasMaintainerPermission: async (_token: string, repository: string) => hasAccess && repository === "owner/allowed" };
   const server = createServer(createAdminHandler(config, database, github as any));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address(); assert(address && typeof address === "object");
@@ -505,6 +529,64 @@ test("OAuth state、Session、CSRF 与跨仓库 Maintainer 权限", { skip: !dat
     assert.equal(response.status, 200);
     response = await fetch(`${origin}/api/memories/${deniedMemory}/reject`, { method: "POST", headers: { cookie: sessionCookie, origin: "http://127.0.0.1", "x-csrf-token": session.csrf } });
     assert.equal(response.status, 403);
+    response = await fetch(`${origin}/api/bootstrap`, { headers: { cookie: sessionCookie } });
+    const bootstrap:any = await response.json();
+    assert.equal(bootstrap.repositories.length,1);assert.equal(bootstrap.repositories[0].id,allowedId);
+    assert.equal(bootstrap.memories.length,1);assert.equal(bootstrap.memories[0].id,allowedMemory);
+    assert.equal(bootstrap.jobs.length,1);assert(!JSON.stringify(bootstrap).includes('private-audit-scope'));
+    response = await fetch(`${origin}/api/jobs`, { headers: { cookie: sessionCookie } });
+    const jobs = await response.json() as any[];
+    assert.equal(jobs.length,1);assert.equal(jobs[0].report_available,true);assert.equal(jobs[0].finding_count,1);
+    assert(!JSON.stringify(jobs).includes("private-audit-scope"));
+    response = await fetch(`${origin}/api/jobs/${review.id}`, { headers: { cookie: sessionCookie } });
+    assert.equal(response.status,200);
+    const detail = await response.json() as any;
+    assert.deepEqual(detail.finding_statuses,[{id:stored[0]!.id,status:"OPEN"}]);
+    assert.equal(detail.review_result.findings[0].candidates.length,2);
+    assert.equal(detail.review_result.findings[0].relatedLocations[0].path,"src/b.ts");
+    response = await fetch(`${origin}/api/jobs/${deniedReview.id}`, { headers: { cookie: sessionCookie } });
+    assert.equal(response.status,403);
+    response = await fetch(`${origin}/api/findings?jobId=${review.id}`, { headers: { cookie: sessionCookie } });
+    const findings = await response.json() as any;
+    assert.equal(findings.items?.length,1);assert.equal(findings.items[0].presentation.candidates.length,2);
+    assert.equal(findings.nextCursor,null);
+    response = await fetch(`${origin}/api/findings?jobId=${deniedReview.id}`, { headers: { cookie: sessionCookie } });
+    assert.deepEqual(await response.json(),{items:[],nextCursor:null});
+    response = await fetch(`${origin}/api/findings?jobId=invalid`, { headers: { cookie: sessionCookie } });
+    assert.equal(response.status,422);
+    const extra = Array.from({length:53},(_,i)=>({...finding,path:`src/page-${i}.ts`}));
+    await database.saveFindings(review,extra,new Set(extra));
+    for(let i=0;i<3;i++) {
+      const replyJob=randomUUID();
+      await database.pool.query("INSERT INTO jobs(id,job_type,repository_id,installation_id,repository,pr_number,target_sha,base_sha,status) VALUES($1,'REPLY_HANDLE',$2,1,'owner/allowed',1,'head','base','succeeded')",[replyJob,allowedId]);
+      await database.pool.query("INSERT INTO reply_publications(source_comment_id,job_id,finding_id,status,created_at) VALUES($1,$2,$3,'published','2026-09-15T00:00:00.000002Z')",[8000+i,replyJob,stored[0]!.id]);
+    }
+    await database.pool.query("UPDATE review_findings SET created_at='2026-09-15T00:00:00.000001Z' WHERE repository_id=$1",[allowedId]);
+    const seen=new Set<string>();let cursor:string|null=null;let pages=0;let firstCursor='';
+    do {
+      const query=new URLSearchParams({jobId:review.id,repositoryId:String(allowedId),limit:'7'});
+      if(cursor)query.set('cursor',cursor);
+      response=await fetch(`${origin}/api/findings?${query}`,{headers:{cookie:sessionCookie}});
+      assert.equal(response.status,200);
+      const page:any=await response.json();assert(page.items.length<=7);assert(page.items.length>0);
+      for(const item of page.items){const key=item.id+':'+(item.source_comment_id??'root');assert(!seen.has(key),'跨页重复');seen.add(key);assert.equal(Number(item.repository_id),allowedId);}
+      cursor=page.nextCursor;firstCursor ||= cursor??'';pages++;assert(pages<20);
+    } while(cursor);
+    assert.equal(seen.size,56,'同时间、多回复分页不能遗漏');
+    hasAccess=false;
+    response=await fetch(`${origin}/api/findings?jobId=${review.id}&repositoryId=${allowedId}&cursor=${firstCursor}`,{headers:{cookie:sessionCookie}});
+    assert.deepEqual(await response.json(),{items:[],nextCursor:null},'旧游标不能绕过撤销的权限');
+    hasAccess=true;
+    for(const query of ['limit=0','limit=51','cursor=garbage','repositoryId=oops',`cursor=${firstCursor}`]) {
+      response=await fetch(`${origin}/api/findings?${query}`,{headers:{cookie:sessionCookie}});assert.equal(response.status,422);
+    }
+    response=await fetch(`${origin}/api/findings?repositoryId=${deniedId}`,{headers:{cookie:sessionCookie}});
+    assert.deepEqual(await response.json(),{items:[],nextCursor:null});
+    await database.pool.query('DELETE FROM reply_publications WHERE finding_id=$1',[stored[0]!.id]);
+    for (const patch of [null,[],{status:"ACTIVE"},{source:{}},{title:" "},{scope:[]},{scope:{owner:["foreign"]}}]) {
+      response = await fetch(`${origin}/api/memories/${allowedMemory}`, { method:"PATCH", headers:{cookie:sessionCookie,origin:"http://127.0.0.1","x-csrf-token":session.csrf}, body:JSON.stringify(patch) });
+      assert.equal(response.status,422);
+    }
     response = await fetch(`${origin}/api/repositories/${allowedId}`, { method: "PATCH", headers: { cookie: sessionCookie, origin: "http://127.0.0.1", "x-csrf-token": session.csrf }, body: JSON.stringify({ enabled: false }) });
     assert.equal(response.status, 200);
     const paused = await database.accept({ deliveryId: "paused-delivery", installationId: 1, repositoryId: allowedId, repository: "owner/allowed", cloneUrl: "url", prNumber: 3, title: "", body: "", baseSha: "base", headSha: "head" }, { event: "pull_request", action: "opened" });
@@ -540,7 +622,7 @@ test("Finding 绑定、Reply 幂等、状态和 decision clue", { skip: !databas
   assert.notEqual(collocated[0]!.id, collocated[1]!.id);
   assert.equal(collocated[0]!.id, collocated[2]!.id);
   assert.deepEqual((await database.saveFindings(accepted.job!, [finding, different], new Set([finding, different]))).map(item => item.id), collocated.slice(0, 2).map(item => item.id));
-  assert.equal(await database.bindFindings(accepted.job!, 10, [{ id: 11, body: `body <!-- pi-finding:${stored[0]!.id} -->` }]), 1);
+  assert.equal(await database.bindFindings(accepted.job!, 10, [{ id: 11, body: `code example <!-- pi-finding:${collocated[1]!.id} -->\n\n<!-- pi-finding:${stored[0]!.id} -->` }]), 1);
   assert.equal((await database.getFindingByRoot(repositoryId, 2, 11))?.bindingStatus, "bound");
   const agentRunId = await database.startAgentRun(accepted.job!.id, "security_reviewer", 500, 1000);
   await database.finishAgentRun(agentRunId, { status: "succeeded", model: "test", usage: { input: 10, output: 5, cacheRead: 20, totalTokens: 35 }, coverage: ["auth"], limitations: [] });

@@ -17,7 +17,7 @@ export function diffLines(files: Array<{ filename: string; patch?: string }>) {
   return lines;
 }
 
-export function normalizeFindingLocation(finding: Finding, lines: Set<string>) {
+export function normalizeFindingLocation(finding: Pick<Finding, "path" | "line" | "side">, lines: Set<string>) {
   if (finding.path && finding.line && finding.side && lines.has(`${finding.path}:${finding.side}:${finding.line}`)) return true;
   delete finding.line;
   delete finding.side;

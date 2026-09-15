@@ -18,11 +18,11 @@ Notes 使用 lifecycle/class/date-topic 路径。当前只创建有实际内容�
 
 ## Verification tooling
 
-scripts/agent-note-tree.ts、verify-agent-note-tree.ts、verify-agent-note-format.ts 复用 write-notes-like-deepseek 技能提供的脚本。仅将运行示例改为 node，并在共享入口加上本 Note 的反向注释。
+scripts/agent-note-tree.ts、verify-agent-note-tree.ts、verify-agent-note-format.ts 的目录与格式规则沿用 write-notes-like-deepseek 技能提供的脚本，运行示例使用 node，共享入口保留本 Note 的反向注释；链接检查统一交给 Markdown 解析器。
 
-package.json 使用 Node.js >=24 和 ESM，直接运行带可擦除类型的脚本；目前没有第三方依赖。npm run check:docs 执行两个校验。该工具选择已在本机 Node v24.18.0 环境核对运行条件。
+package.json 使用 Node.js >=24 和 ESM。npm run check:docs 顺序执行 Notes 目录、Notes 格式和项目 Markdown 链接检查。链接检查使用开发依赖 marked、github-slugger、entities，分别负责解析 Markdown、生成重复标题锚点和解码标题中的 HTML 实体，不进入业务构建。
 
-现有校验覆盖 Notes 结构、头块、章节和活动 Notes 内部相对文件链接；不覆盖全部 Markdown 链接、归档冻结或语义判断，这些仍通过改动复核完成。
+[链接检查器](../../../../scripts/check-markdown-links.mjs) 覆盖根目录 Markdown、docs/ 与 .agents/notes/；在 Git 仓库中从 tracked 与 untracked 且未忽略文件建立清单，避免读取本地会话导出。检查行内／引用式链接、图片路径、本地 Markdown 锚点、中文与重复标题、Setext 标题及显式 HTML id/name。代码围栏和行内代码不产生链接。外部 URL 不请求；非 Markdown 文件只检查存在性。无 Git 的文档副本按相同目录范围检查。归档冻结和语义仍需复核。
 
 ## Alternatives considered
 
@@ -38,6 +38,10 @@ ADR 适合稳定追踪架构决定，站点适合多人浏览大量资料。当�
 
 完整结构有利于成熟团队统一使用。但本项目尚无 rejected/archived 记录，空目录和模板不能帮助完成当前任务。因此目录按需创建，复用现成校验工具；无需先引入看板或模板管理。
 
+### 正则检查链接与自行实现 Markdown 标题规则
+
+正则容易把代码示例视为链接，也难以正确处理引用链接、嵌套格式、重复标题与 HTML 实体。使用明确锁定的开发依赖解析这些语法，并移除旧 Note 检查器中的重复链接正则；代价是需要随工具维护依赖锁文件。
+
 ## Consequences
 
 收益：接手者有明确阅读顺序，需求与任务进度分开，决定能追踪备选和代价。项目移动后，文档和校验脚本不依赖用户的技能安装路径。
@@ -48,6 +52,4 @@ ADR 适合稳定追踪架构决定，站点适合多人浏览大量资料。当�
 
 ## Verification
 
-验证命令为根目录的 npm run check:docs。2026-09-10 初始化验证通过：2 篇 Note 的结构与格式检查通过，18 个项目内 Markdown 文件链接有效；临时反例确认校验器会拒绝状态与路径不一致、Notes 相对死链。
-
-AGENTS.md 与共享校验入口均指向本记录；M0 任务全部保留未完成，架构 Note 保持 proposed。此记录只说明已建立的文档流程，不声称业务服务已实现。
+验证入口为 npm run check:docs 与 test/docs-links.test.ts 的成功／失败样本。当前命令结果见 [UX 清单](../../../../docs/tasks/UX.md#2026-09-15四项优化实现与验证)，历史阶段证据保留在各阶段任务清单。

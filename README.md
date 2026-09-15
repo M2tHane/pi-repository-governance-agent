@@ -1,8 +1,8 @@
 # Pi Repository Governance Agent
 
-一个 TypeScript 服务，通过 GitHub App 接收 Webhook，在固定提交的只读 Workspace 中调用 Pi，发布 COMMENT Review，并将合并后的工程决定交给维护者确认后用于后续审查。
+帮助团队 Review PR，并记住已经确认的工程决定。开发者在 PR 里查看简短问题与建议，维护者在管理页确认团队规则。底层使用 TypeScript、GitHub App、固定提交的只读 Workspace 与 Pi。
 
-服务支持 inline finding、线程复核、按需多 Agent、共享预算，以及 M3 的仓库健康检查与历史报告。当前任务与验证见 [M3 清单](docs/tasks/M3.md)；M2 的独立人工验收状态见 [M2 清单](docs/tasks/M2.md)。
+服务支持 inline finding、线程复核、按需多 Agent、共享预算，以及 M3 的仓库健康检查与历史报告。本轮体验收口与验证见 [UX 清单](docs/tasks/UX.md)，健康检查实现记录见 [M3 清单](docs/tasks/M3.md)；M2 的独立人工验收状态见 [M2 清单](docs/tasks/M2.md)。
 
 ## 启动
 
@@ -20,7 +20,7 @@ npm run migrate
 npm start
 ```
 
-开发时使用 `npm run dev`。数据库配置与默认本地端口见 [compose.yaml](compose.yaml)。正常服务只有一个 PostgreSQL Worker。
+`npm run migrate` 会先构建，`npm start` 只运行已有 `dist/`。开发时可使用 `npm run dev`：启动前构建一次，再监听编译产物；修改 `src/` 或 `admin/` 后需另行执行 `npm run build` 并刷新页面。数据库配置与默认本地端口见 [compose.yaml](compose.yaml)。正常服务只有一个 PostgreSQL Worker。
 
 ## 配置
 
@@ -39,9 +39,13 @@ npm start
 | QUEUE_CAPACITY | 保留用于 M0 内存队列；当前 PostgreSQL Worker 不使用此参数 |
 | NODE_USE_ENV_PROXY / HTTPS_PROXY / NO_PROXY | 可选：让 Node 使用本机已有代理，保持 TLS 校验 |
 
-管理界面可设置 repository enabled、路径范围、输出语言、Job 总 token 预算、single/auto 和 max delegates。预算不足会明确失败或 partial，不能按 child 数量扩大额度。固定复杂样本的评测配置和实际用量记录在 M2 清单中。
+OAuth state 有效期 10 分钟，登录会话有效期 8 小时，到期自动回收；两类记录各最多 1000 条，满额时新登录返回 503，请稍后重试。
 
-Health 页面使用同一仓库的路径范围、语言和预算。点击“运行健康检查”后，服务固定默认分支 SHA 和最近 30 天窗口；同仓库已有活动健康任务时返回原任务。定时默认关闭，可在 Health 页面设置每日／每周，并查看下次 UTC 执行时间。
+管理页主导航为概览、团队规则和仓库；仓库页设置启停，设置 → 审查策略管理路径范围、输出语言、任务预算、审查方式和专项上限。预算不足会明确失败或 partial，不能按 child 数量扩大额度。固定复杂样本的评测配置和实际用量记录在 M2 清单中。
+
+设置 → 审查讨论支持仓库筛选，每次最多加载 50 条，可继续加载、重试或刷新。管理页首次加载通过聚合 API 复用本次仓库授权，每次新请求仍重新检查权限。
+
+设置 → 仓库健康检查使用同一仓库的路径范围、语言和预算。点击“运行健康检查”后，服务固定默认分支 SHA 和最近 30 天窗口；同仓库已有活动健康任务时返回原任务。定时默认关闭，可在健康检查页设置每日／每周，并查看下次 UTC 执行时间。
 
 macOS 若对私钥路径返回 EPERM，应授权对应目录访问或将已有私钥放到可读的本地私密位置。浏览器能访问 GitHub 而 Node OAuth 请求失败时，检查系统代理与 Node 环境是否一致。
 
@@ -58,7 +62,7 @@ macOS 若对私钥路径返回 EPERM，应授权对应目录访问或将已有�
 ## 当前行为
 
 - opened / reopened / synchronize / ready_for_review：Review 固定 head；Draft、closed、暂停仓库和 fork 不进入新 Review。
-- 可定位 finding 绑定 inline comment；不可靠的行号降级到 summary。
+- 同根因候选合并为一个短评，保留关联位置和完整证据。可定位问题绑定 inline comment，不可靠的行号降级到 summary。
 - 人类回复本 App 的已绑定线程：重新读取当前 head，产生 FIXED、MISJUDGMENT、VALID_EXCEPTION、STILL_VALID 或 NEEDS_CLARIFICATION。
 - merged PR：Decision Extractor 只提出 CANDIDATE；ACTIVE / supersede / deprecate 仍需维护者操作。
 - 简单 PR 使用单 Agent；复杂 PR 由 Main 从允许角色中选择，最多两项同时运行，深度固定为一层。
@@ -81,7 +85,9 @@ npm run check:docs
 npm audit --audit-level=high
 ```
 
-`npm test` 包含构建、Node 内置测试、真实 Pi Session 配合 Provider 替身和本地 Git 样本。`test:db` 在临时 schema 运行并回收，不接触真实任务队列。
+`npm test` 包含构建、Node 内置测试、真实 Pi Session 配合 Provider 替身和本地 Git 样本。`test:db` 从环境或 `.env` 读取 `DATABASE_URL`，在临时 schema 运行并回收，不接触真实任务队列；缺少连接配置会跳过数据库用例，不能据退出码认定验证通过。两个测试命令都会构建，请顺序执行。
+
+`check:docs` 验证 Notes 结构和格式，并检查根目录 Markdown、`docs/`、`.agents/notes/` 的本地文件链接与标题锚点。它遵守 Git 忽略规则，也检查未跟踪的新文档；代码示例、外部 URL 不作本地链接检查。外部链接可用性与文档语义仍需人工复核。文档与优化检查记录见 [UX 清单](docs/tasks/UX.md#2026-09-15文档同步与项目优化检查)。
 
 固定对照使用测试仓库提交 `ad75aa1e1f1a3604682af068c2c048da23bbbe7a` 的干净 checkout：
 
@@ -91,5 +97,13 @@ node --env-file=.env scripts/evaluate-m2.mjs /absolute/path/to/fixed-checkout
 ```
 
 结果写入被忽略的 `work/m2-evaluation.json`。该命令只调用模型，不运行样本代码、不发布 GitHub Review；Memory 场景是合成数据。Main 改动后可加 `--selective-only` 复用相同 SHA 和预算下已保存的 single baseline。
+
+订单根因聚合与真实规则引用使用完整演示保留的 `work/e2e-order-api`、`work/e2e-order-followup` checkout（固定 SHA 写在脚本中）：
+
+```sh
+node --env-file=.env scripts/evaluate-ux.mjs
+```
+
+结果保存到 `work/ux-model-evaluation.json`。可附 `orders-single`、`orders-main` 或 `rule-reference` 单独运行，结果按样本另存。它只读取数据库中的规则并调用模型；Main 样本显式调用编排，partial 状态原样记录。
 
 产品范围见 [PRD-MVP](docs/PRD-MVP.md)，实现分层见 [architecture](docs/architecture.md)，安全与恢复见 [reliability-security](docs/reliability-security.md)。

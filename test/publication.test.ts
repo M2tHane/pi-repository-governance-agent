@@ -34,7 +34,7 @@ test("固定提交发布：旧 head 不发布，绑定失败保留已发布 Revi
       installationToken: async () => "test-token",
       getPullRequest: async () => ({ state: "open", draft: false, base: { sha: baseSha }, head: { sha: currentHead } }),
       getFiles: async () => [{ filename: "src/a.ts", status: "modified", patch: "@@ -1 +1 @@\n-export const value = 1;\n+export const value = 2;" }],
-      createReview: async (_token: string, _job: ReviewJob, body: string, comments: unknown[]) => { assert.match(body, /1 条意见作为行内评论/); assert(!body.includes("在本次检查范围内未产出 finding")); assert.equal(comments.length, 1); reviewPosts++; return { id: 99, html_url: "https://example/review/99" }; },
+      createReview: async (_token: string, _job: ReviewJob, body: string, comments: unknown[]) => { assert.match(body, /发现 1 个需要处理的问题/); assert(!body.includes("在本次检查范围内未产出 finding")); assert.equal(comments.length, 1); reviewPosts++; return { id: 99, html_url: "https://example/review/99" }; },
       getReviewCommentsForReview: async () => { throw new GitHubApiError("/comments", 403); },
       getReviewComments: async () => [],
       replyToReviewComment: async () => { replyPosts++; throw new Error("network result unknown"); },

@@ -201,7 +201,11 @@ Main 不重复完整审查，最终返回 summary 与候选 key 分组。服务�
 
 ### 8.1 ReviewResult
 
-下述身份与 fingerprint 由服务封装，不接受模型提供。模型只返回 summary、findings、coverage、limitations；finding 的可选 null 字段规范化为未提供后再校验。
+下述身份与 fingerprint 由服务封装，不接受模型提供。专项只返回 summary、findings、coverage、limitations；独立审查另返回 findingGroups 与 issueDisplays，Main 根据专项候选标识返回分组和短评。finding 的可选 null 字段规范化为未提供后再校验。
+
+服务检查分组完整性、每个成员恰好一次、短评长度、路径与规则引用。单 Agent 与 Main 共用合并逻辑，保存 candidates 原始意见、relatedLocations 与最高严重度；新字段不能由候选伪造。展示结果保存在 jobs.review_result 和 review_findings.presentation，旧数据按历史格式读取。完整审计仅由有仓库维护权限的详情 API 返回。
+
+短评总计最多 120 字符，提示词为字段留出余量。可选代码最多 5 行 / 240 字符；无法通过结构校验的专项按既有 partial 规则处理。摘要位置仍提供可展开的修改建议。设计取舍见 [体验收口 Note](../.agents/notes/implemented/feature/2026-09-13-review-experience.md)。
 
 至少包含：
 
@@ -315,3 +319,10 @@ GitHub App → Webhook → Event Dispatcher → Pi PR Review Agent → GitHub CO
 ### M3
 
 补齐：Health Auditor、定时 / 手动触发、健康报告与趋势。
+
+
+## 管理页资源边界
+
+OAuth state 与 session 按 TTL 自动回收，各有 1000 条容量上限。首次加载通过 `GET /api/bootstrap` 在单次请求内复用仓库授权，每批最多 4 个权限查询，不跨请求缓存权限。
+
+`GET /api/findings` 返回 `{ items, nextCursor }`，默认每页 50 条，支持 `limit`（1～50）、`repositoryId`、`jobId` 和 `cursor`。签名游标绑定筛选条件，排序保留微秒时间和大整数回复 ID；每页重新鉴权。管理页与 Review 详情都按需加载讨论，详情的 `finding_statuses` 独立于讨论页。具体取舍见 [管理页资源边界 Note](../.agents/notes/implemented/architecture/2026-09-15-admin-resource-bounds.md)。

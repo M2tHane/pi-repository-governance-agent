@@ -31,9 +31,34 @@ function repository(row: Record<string, unknown>): Repository {
   return { id: Number(row.id), installationId: Number(row.installation_id), fullName: String(row.full_name), enabled: Boolean(row.enabled), includePaths: row.include_paths as string[], excludePaths: row.exclude_paths as string[], outputLanguage: String(row.output_language), budgetTokens: Number(row.budget_tokens), reviewMode: row.review_mode as "single" | "auto", maxDelegates: Number(row.max_delegates), healthSchedule: row.health_schedule as Repository["healthSchedule"], healthNextRunAt: row.health_next_run_at instanceof Date ? row.health_next_run_at.toISOString() : null, healthLastError: row.health_last_error ? String(row.health_last_error) : null };
 }
 
+// Note: 有界会话、单次授权与讨论分页，见 .agents/notes/implemented/architecture/2026-09-15-admin-resource-bounds.md。
+export class ExpiringStore<T> {
+  private values = new Map<string, { value: T; expiresAt: number; timer: ReturnType<typeof setTimeout> }>();
+  constructor(private ttlMs: number, private capacity: number) {}
+  get size() { return this.values.size; }
+  get(key: string): T | undefined {
+    const entry = this.values.get(key);
+    if (entry && entry.expiresAt <= Date.now()) { this.delete(key); return undefined; }
+    return entry?.value;
+  }
+  set(key: string, value: T): boolean {
+    if (!this.values.has(key) && this.values.size >= this.capacity) return false;
+    this.delete(key);
+    const timer = setTimeout(() => this.delete(key), this.ttlMs);
+    timer.unref();
+    this.values.set(key, { value, expiresAt: Date.now() + this.ttlMs, timer });
+    return true;
+  }
+  delete(key: string) {
+    const entry = this.values.get(key);
+    if (entry) clearTimeout(entry.timer);
+    this.values.delete(key);
+  }
+}
+
 export function createAdminHandler(config: Config, database: Database, github = new GitHubClient(config.appId, config.privateKey)) {
-  const sessions = new Map<string, Session>();
-  const states = new Map<string, number>();
+  const sessions = new ExpiringStore<Session>(8 * 60 * 60_000, 1000);
+  const states = new ExpiringStore<number>(10 * 60_000, 1000);
   const memories = new MemoryService(database);
   const configured = Boolean(config.githubClientId && config.githubClientSecret && config.githubOAuthCallbackUrl && config.sessionSecret && config.sessionSecret.length >= 32);
   const secure = config.githubOAuthCallbackUrl?.startsWith("https://") ?? false;
@@ -47,15 +72,29 @@ export function createAdminHandler(config: Config, database: Database, github = 
     const actual = Buffer.from(signature);
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return undefined;
     const value = sessions.get(id);
-    if (!value || value.expiresAt < Date.now()) { sessions.delete(id); return undefined; }
+    if (!value || value.expiresAt <= Date.now()) { sessions.delete(id); return undefined; }
     return value;
   }
 
   async function allowedRepositories(user: Session) {
     const result = await database.pool.query("SELECT * FROM repositories ORDER BY full_name");
     const values: Repository[] = [];
-    for (const row of result.rows) if (await github.hasMaintainerPermission(user.token, String(row.full_name))) values.push(repository(row));
+    // 每次请求重新授权；只在本次聚合读取复用，不缓存权限结论。
+    for (let offset = 0; offset < result.rows.length; offset += 4) {
+      const batch = result.rows.slice(offset, offset + 4);
+      const checks = await Promise.allSettled(batch.map(row => github.hasMaintainerPermission(user.token, String(row.full_name))));
+      for (const [index, check] of checks.entries()) {
+        if (check.status === "rejected") throw check.reason;
+        if (check.value) values.push(repository(batch[index]!));
+      }
+    }
     return values;
+  }
+
+  async function listJobs(ids: number[]) {
+    if (!ids.length) return [];
+    const result = await database.pool.query("SELECT j.*,(SELECT count(*)::int FROM review_findings f WHERE f.job_id=j.id) finding_count,p.github_review_url,COALESCE((SELECT jsonb_agg(to_jsonb(a) - 'job_id' ORDER BY a.started_at) FROM agent_runs a WHERE a.job_id=j.id),'[]') agent_runs FROM jobs j LEFT JOIN review_publications p ON p.job_id=j.id WHERE j.repository_id=ANY($1::bigint[]) ORDER BY j.created_at DESC LIMIT 200", [ids]);
+    return result.rows.map(({review_result,...row})=>({...row,report_available:Boolean(review_result)}));
   }
 
   async function authorize(request: IncomingMessage, response: ServerResponse, repositoryId: number) {
@@ -80,7 +119,7 @@ export function createAdminHandler(config: Config, database: Database, github = 
       if (request.method === "GET" && url.pathname === "/auth/github") {
         if (!configured) return json(response, 503, { error: "OAuth 未配置" });
         const state = randomBytes(32).toString("base64url");
-        states.set(state, Date.now() + 10 * 60_000);
+        if (!states.set(state, Date.now() + 10 * 60_000)) return json(response, 503, { error: "登录请求过多，请稍后重试" });
         response.writeHead(302, { location: `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(config.githubClientId!)}&redirect_uri=${encodeURIComponent(config.githubOAuthCallbackUrl!)}&state=${state}`, "set-cookie": cookie("oauth_state", state, 600) }).end();
         return;
       }
@@ -88,18 +127,18 @@ export function createAdminHandler(config: Config, database: Database, github = 
         const code = url.searchParams.get("code");
         const state = url.searchParams.get("state");
         const expiresAt = state ? states.get(state) : undefined;
-        if (!configured || !code || !state || cookies(request).oauth_state !== state || !expiresAt || expiresAt < Date.now()) return json(response, 400, { error: "OAuth state 无效" });
+        if (!configured || !code || !state || cookies(request).oauth_state !== state || !expiresAt || expiresAt <= Date.now()) return json(response, 400, { error: "OAuth state 无效" });
         states.delete(state);
         const token = await github.exchangeOAuthCode(config.githubClientId!, config.githubClientSecret!, code);
         const actor = await github.getUser(token);
         const id = randomBytes(32).toString("base64url");
-        sessions.set(id, { ...actor, token, csrf: randomBytes(24).toString("base64url"), expiresAt: Date.now() + 8 * 60 * 60_000 });
+        if (!sessions.set(id, { ...actor, token, csrf: randomBytes(24).toString("base64url"), expiresAt: Date.now() + 8 * 60 * 60_000 })) return json(response, 503, { error: "登录会话已满，请稍后重试" });
         response.writeHead(302, { location: "/", "set-cookie": [cookie("session", `${id}.${sign(id)}`, 8 * 60 * 60), cookie("oauth_state", "", 0)] }).end();
         return;
       }
       if (request.method === "POST" && url.pathname === "/auth/logout") {
         const user = session(request);
-        if (user && requireCsrf(request, response, user)) for (const [id, value] of sessions) if (value === user) sessions.delete(id);
+        if (user && requireCsrf(request, response, user)) sessions.delete((cookies(request).session ?? "").split(".")[0]!);
         if (!response.headersSent) response.writeHead(204, { "set-cookie": cookie("session", "", 0) }).end();
         return;
       }
@@ -111,6 +150,14 @@ export function createAdminHandler(config: Config, database: Database, github = 
         const user = session(request);
         if (!user) return json(response, 401, { error: "请先登录" });
         if (request.method !== "GET" && !requireCsrf(request, response, user)) return;
+        if (request.method === "GET" && url.pathname === "/api/bootstrap") {
+          const repositories = await allowedRepositories(user);
+          const [jobs, memoryLists] = await Promise.all([
+            listJobs(repositories.map(item => item.id)),
+            Promise.all(repositories.map(item => memories.list(item.id))),
+          ]);
+          return json(response, 200, { repositories, jobs, memories: memoryLists.flat() });
+        }
         if (request.method === "GET" && url.pathname === "/api/repositories") return json(response, 200, await allowedRepositories(user));
         const healthAction = url.pathname.match(/^\/api\/repositories\/(\d+)\/(health|health-schedule)$/);
         if (healthAction && (request.method === "POST" && healthAction[2] === "health" || request.method === "PATCH" && healthAction[2] === "health-schedule")) {
@@ -177,8 +224,7 @@ export function createAdminHandler(config: Config, database: Database, github = 
         if (request.method === "GET" && url.pathname === "/api/jobs") {
           const repositories = await allowedRepositories(user); const ids = repositories.map((item) => item.id);
           if (!ids.length) return json(response, 200, []);
-          const result = await database.pool.query("SELECT j.*,p.github_review_url,COALESCE((SELECT jsonb_agg(to_jsonb(a) - 'job_id' ORDER BY a.started_at) FROM agent_runs a WHERE a.job_id=j.id),'[]') agent_runs FROM jobs j LEFT JOIN review_publications p ON p.job_id=j.id WHERE j.repository_id=ANY($1::bigint[]) ORDER BY j.created_at DESC LIMIT 200", [ids]);
-          return json(response, 200, result.rows);
+          return json(response, 200, await listJobs(ids));
         }
         const jobMatch = url.pathname.match(/^\/api\/jobs\/([0-9a-f-]+)$/i);
         if (jobMatch && request.method === "GET") {
@@ -186,13 +232,39 @@ export function createAdminHandler(config: Config, database: Database, github = 
           if (!result.rows[0]) return json(response, 404, { error: "Job 不存在" });
           if (!await authorize(request, response, Number(result.rows[0].repository_id))) return;
           const runs = await database.pool.query("SELECT * FROM agent_runs WHERE job_id=$1 ORDER BY started_at", [jobMatch[1]]);
-          return json(response, 200, { ...result.rows[0], agent_runs: runs.rows });
+          const statuses = await database.pool.query("SELECT id,status FROM review_findings WHERE job_id=$1 ORDER BY id", [jobMatch[1]]);
+          return json(response, 200, { ...result.rows[0], agent_runs: runs.rows, finding_statuses: statuses.rows });
         }
         if (request.method === "GET" && url.pathname === "/api/findings") {
-          const repositories = await allowedRepositories(user); const ids = repositories.map((item) => item.id);
-          if (!ids.length) return json(response, 200, []);
-          const result = await database.pool.query("SELECT f.*,source_job.repository,j.payload->>'humanReplyBody' human_reply_body,j.payload->>'humanActorLogin' human_actor_login,j.payload->>'sourceCommentUrl' human_reply_url,r.source_comment_id,r.analysis_head_sha,r.result reply_result,r.github_reply_url,r.status reply_publish_status,CASE WHEN d.id IS NOT NULL THEN jsonb_build_object('id',d.id,'type',d.type,'summary',d.summary) END decision_clue FROM review_findings f JOIN jobs source_job ON source_job.id=f.job_id LEFT JOIN reply_publications r ON r.finding_id=f.id LEFT JOIN jobs j ON j.id=r.job_id LEFT JOIN decision_clues d ON d.repository_id=f.repository_id AND d.source_human_comment_id=r.source_comment_id WHERE f.repository_id=ANY($1::bigint[]) ORDER BY COALESCE(r.created_at,f.created_at) DESC", [ids]);
-          return json(response, 200, result.rows);
+          const jobId = url.searchParams.get("jobId"), repositoryId = url.searchParams.get("repositoryId");
+          const limit = Number(url.searchParams.get("limit") ?? 50);
+          if (jobId !== null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(jobId) || repositoryId !== null && (!/^\d+$/.test(repositoryId) || !Number.isSafeInteger(Number(repositoryId)) || Number(repositoryId) <= 0) || !Number.isSafeInteger(limit) || limit < 1 || limit > 50) return json(response, 422, { error: "讨论筛选或分页参数无效" });
+          let cursor: { at: string; finding: string; reply: string; jobId: string | null; repositoryId: string | null } | undefined;
+          const rawCursor = url.searchParams.get("cursor");
+          if (rawCursor !== null) {
+            try {
+              if (rawCursor.length > 2048) throw new Error();
+              const [payload, signature, extra] = rawCursor.split(".");
+              if (!payload || !signature || extra !== undefined) throw new Error();
+              const expected = Buffer.from(sign(payload)), actual = Buffer.from(signature);
+              if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw new Error();
+              const value = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+              if (!value || value.jobId !== jobId || value.repositoryId !== repositoryId || typeof value.at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/.test(value.at) || typeof value.finding !== "string" || !/^finding_[0-9a-f]{24}$/.test(value.finding) || typeof value.reply !== "string" || !/^\d{1,19}$/.test(value.reply)) throw new Error();
+              cursor = value;
+            } catch { return json(response, 422, { error: "讨论游标无效，请重新加载" }); }
+          }
+          const repositories = await allowedRepositories(user);
+          const ids = repositories.filter(item => repositoryId === null || item.id === Number(repositoryId)).map(item => item.id);
+          if (!ids.length) return json(response, 200, { items: [], nextCursor: null });
+          const result = await database.pool.query(`SELECT f.*,to_char(COALESCE(r.created_at,f.created_at) AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') cursor_at,COALESCE(r.source_comment_id,0)::text cursor_reply,source_job.repository,j.payload->>'humanReplyBody' human_reply_body,j.payload->>'humanActorLogin' human_actor_login,j.payload->>'sourceCommentUrl' human_reply_url,r.source_comment_id,r.analysis_head_sha,r.result reply_result,r.github_reply_url,r.status reply_publish_status,CASE WHEN d.id IS NOT NULL THEN jsonb_build_object('id',d.id,'type',d.type,'summary',d.summary) END decision_clue FROM review_findings f JOIN jobs source_job ON source_job.id=f.job_id LEFT JOIN reply_publications r ON r.finding_id=f.id LEFT JOIN jobs j ON j.id=r.job_id LEFT JOIN decision_clues d ON d.repository_id=f.repository_id AND d.source_human_comment_id=r.source_comment_id WHERE f.repository_id=ANY($1::bigint[]) AND ($2::uuid IS NULL OR f.job_id=$2) AND ($3::timestamptz IS NULL OR (COALESCE(r.created_at,f.created_at),f.id,COALESCE(r.source_comment_id,0)) < ($3::timestamptz,$4::text,$5::bigint)) ORDER BY COALESCE(r.created_at,f.created_at) DESC,f.id DESC,COALESCE(r.source_comment_id,0) DESC LIMIT $6`, [ids, jobId, cursor?.at ?? null, cursor?.finding ?? null, cursor?.reply ?? null, limit + 1]);
+          const rows = result.rows.slice(0, limit);
+          let nextCursor: string | null = null;
+          if (result.rows.length > limit) {
+            const last = rows.at(-1)!;
+            const payload = Buffer.from(JSON.stringify({ at: last.cursor_at, finding: last.id, reply: last.cursor_reply, jobId, repositoryId })).toString("base64url");
+            nextCursor = payload + "." + sign(payload);
+          }
+          return json(response, 200, { items: rows.map(({ cursor_at, cursor_reply, ...row }) => row), nextCursor });
         }
         if (request.method === "GET" && url.pathname === "/api/memories") {
           const repositories = await allowedRepositories(user); const status = url.searchParams.get("status") ?? undefined;
@@ -211,8 +283,9 @@ export function createAdminHandler(config: Config, database: Database, github = 
           }
           if (request.method === "PATCH" && !memoryMatch[2]) {
             const value = await body(request) as CandidatePatch;
+            if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).some(key => !["type", "title", "content", "rationale", "scope", "uncertainties"].includes(key))) return json(response, 422, { error: "只允许编辑规则内容与适用范围" });
             const types = new Set(["architecture_decision", "engineering_rule", "security_rule", "coding_convention", "exception", "deprecated_pattern"]);
-            if ((value.type !== undefined && !types.has(value.type)) || (value.title !== undefined && typeof value.title !== "string") || (value.content !== undefined && typeof value.content !== "string") || (value.rationale !== undefined && typeof value.rationale !== "string") || (value.uncertainties !== undefined && (!Array.isArray(value.uncertainties) || !value.uncertainties.every((x) => typeof x === "string"))) || (value.scope !== undefined && (!value.scope || typeof value.scope !== "object" || !Object.values(value.scope).every((x) => x === undefined || Array.isArray(x) && x.every((item) => typeof item === "string"))))) return json(response, 422, { error: "Memory 修改无效" });
+            if ((value.type !== undefined && !types.has(value.type)) || (value.title !== undefined && (typeof value.title !== "string" || !value.title.trim())) || (value.content !== undefined && (typeof value.content !== "string" || !value.content.trim())) || (value.rationale !== undefined && (typeof value.rationale !== "string" || !value.rationale.trim())) || (value.uncertainties !== undefined && (!Array.isArray(value.uncertainties) || !value.uncertainties.every((x) => typeof x === "string"))) || (value.scope !== undefined && (!value.scope || typeof value.scope !== "object" || Array.isArray(value.scope) || Object.keys(value.scope).some(key => !["paths", "languages", "modules", "conditions"].includes(key)) || !Object.values(value.scope).every((x) => x === undefined || Array.isArray(x) && x.every((item) => typeof item === "string"))))) return json(response, 422, { error: "Memory 修改无效" });
             return json(response, 200, await memories.edit(access.repository.id, memoryMatch[1]!, value, user));
           }
           if (request.method === "POST" && memoryMatch[2] === "supersede") return json(response, 200, await memories.supersede(access.repository.id, memoryMatch[1]!, String((await body(request) as { candidateId?: string }).candidateId ?? ""), user));

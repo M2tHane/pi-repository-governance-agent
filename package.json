@@ -16,7 +16,7 @@
     "test:db": "npm run build && node --env-file-if-exists=.env --test dist/test/database.test.js",
     "verify-agent-note-tree": "node scripts/verify-agent-note-tree.ts",
     "verify-agent-note-format": "node scripts/verify-agent-note-format.ts",
-    "check:docs": "npm run verify-agent-note-tree && npm run verify-agent-note-format"
+    "check:docs": "npm run verify-agent-note-tree && npm run verify-agent-note-format && node scripts/check-markdown-links.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",
@@ -29,7 +29,10 @@
     "@types/pg": "8.23.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "entities": "7.0.0",
     "esbuild": "^0.25.12",
+    "github-slugger": "2.0.0",
+    "marked": "18.0.5",
     "typescript": "7.0.2"
   }
 }

@@ -23,7 +23,7 @@ const fakeMain: typeof runAgentSession = async (input) => {
   const tool = input.tools![0]!;
   const results = await Promise.all(["general_review", "security_reviewer"].map((role) => tool.execute(role, { role, objective: "check boundary", maxTokens: 300, timeoutMs: 500 }, input.signal, undefined, {} as never)));
   const keys = results.flatMap((result) => { const value = JSON.parse((result.content[0] as { text: string }).text); return value.findings?.map((finding: { key: string }) => finding.key) ?? []; });
-  return { text: JSON.stringify({ summary: "部分检查完成", findingGroups: keys.length ? [keys] : [] }), durationMs: 1, model: "test", usage: { ...emptyUsage(), input: 8, output: 2, totalTokens: 10 } };
+  return { text: JSON.stringify({ summary: "部分检查完成", findingGroups: keys.length ? [keys] : [], issueDisplays: keys.length ? [{ title:"缺少授权检查",reason:"入口直接访问受限数据。",fix:"读取前验证访问权限。" }] : [] }), durationMs: 1, model: "test", usage: { ...emptyUsage(), input: 8, output: 2, totalTokens: 10 } };
 };
 
 test("ComplexityProfile 让小改动走 single，只为真实维度开放角色", () => {
@@ -113,4 +113,16 @@ test("共享请求预留与并发上限阻止 N 倍预算，聚合保留专项�
   assert.throws(() => aggregate(job, runs, [], []), /遗漏/);
   assert.throws(() => aggregate(job, runs, [], [["foreign"]]), /未知/);
   assert.throws(() => aggregate(job, runs, [], [keys, [keys[0]!]]), /重复/);
+});
+
+test("Main 汇总两个成功专项的完整候选，只生成一次短评", async () => {
+  const database=fakeDatabase();
+  const result=await orchestrateReview({config,database,job,root:"/tmp",files:[{filename:"auth/a.ts",status:"modified"},{filename:"api/b.ts",status:"modified"}],memories:[],budgetTokens:1000,maxDelegates:2,signal:new AbortController().signal},async (_context,input)=>({role:input.role,result:{summary:"checked",findings:[{...finding,path:input.role==="general_review"?"auth/a.ts":"api/b.ts"}],coverage:[input.role],limitations:[]},durationMs:1,model:"test",usage:emptyUsage()}),fakeMain);
+  assert.equal(result.orchestration.partial,false);
+  assert.equal(result.orchestration.rolesRun.length,2);
+  assert.equal(result.result.findings.length,1);
+  assert.equal(result.result.findings[0]!.candidates!.length,2);
+  assert.deepEqual(new Set(result.result.findings[0]!.candidates!.map(candidate=>candidate.reviewerRole)),new Set(["general_review","security_reviewer"]));
+  assert.equal(result.result.findings[0]!.relatedLocations!.length,1);
+  assert.equal(database.runs[0].finish.status,"succeeded");
 });

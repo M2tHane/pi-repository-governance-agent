@@ -268,6 +268,10 @@ export class Database implements JobAcceptor {
     return row ? { enabled: Boolean(row.enabled), includePaths: row.include_paths as string[], excludePaths: row.exclude_paths as string[], outputLanguage: String(row.output_language), budgetTokens: Number(row.budget_tokens), reviewMode: String(row.review_mode) as "single" | "auto", maxDelegates: Number(row.max_delegates) } : undefined;
   }
 
+  async saveReviewResult(job: ReviewJob, result: import("./types.js").ReviewResult) {
+    await this.pool.query("UPDATE jobs SET review_result=$2 WHERE id=$1", [job.id, JSON.stringify(result)]);
+  }
+
   async saveFindings(job: ReviewJob, findings: Finding[], inline: Set<Finding>) {
     const values: StoredFinding[] = [];
     const occurrences = new Map<string, number>(), seen = new Map<string, StoredFinding>();
@@ -280,7 +284,7 @@ export class Database implements JobAcceptor {
       const occurrence = occurrences.get(locationKey) ?? 0;
       occurrences.set(locationKey, occurrence + 1);
       const identity = findingIdentity(job, finding, occurrence);
-      const result = await this.pool.query("INSERT INTO review_findings(id,job_id,repository_id,pr_number,head_sha,fingerprint,category,severity,evidence_level,path,line,side,description,evidence,impact,suggestion,memory_id,memory_version,binding_status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) ON CONFLICT(fingerprint) DO UPDATE SET updated_at=now() RETURNING *", [identity.id, job.id, job.repositoryId, job.prNumber, job.headSha, identity.fingerprint, finding.category, finding.severity, finding.evidenceLevel, finding.path ?? null, finding.line ?? null, finding.side ?? null, finding.description, finding.evidence, finding.impact, finding.suggestion ?? null, finding.memory?.id ?? null, finding.memory?.version ?? null, inline.has(finding) ? "pending" : "summary"]);
+      const result = await this.pool.query("INSERT INTO review_findings(id,job_id,repository_id,pr_number,head_sha,fingerprint,category,severity,evidence_level,path,line,side,description,evidence,impact,suggestion,memory_id,memory_version,binding_status,presentation) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ON CONFLICT(fingerprint) DO UPDATE SET updated_at=now() RETURNING *", [identity.id, job.id, job.repositoryId, job.prNumber, job.headSha, identity.fingerprint, finding.category, finding.severity, finding.evidenceLevel, finding.path ?? null, finding.line ?? null, finding.side ?? null, finding.description, finding.evidence, finding.impact, finding.suggestion ?? null, finding.memory?.id ?? null, finding.memory?.version ?? null, inline.has(finding) ? "pending" : "summary", JSON.stringify({display:finding.display,relatedLocations:finding.relatedLocations,mergedCount:finding.mergedCount,memory:finding.memory,candidates:finding.candidates})]);
       const stored = rowToFinding(result.rows[0]);
       values.push(stored); seen.set(signature, stored);
     }
@@ -290,7 +294,7 @@ export class Database implements JobAcceptor {
   async bindFindings(job: ReviewJob, reviewId: number, comments: Array<{ id: number; body: string }>) {
     const bound = new Set<string>();
     for (const comment of comments) {
-      const id = comment.body.match(/<!-- pi-finding:([a-z0-9_-]+) -->/)?.[1];
+      const id = comment.body.match(/<!-- pi-finding:([a-z0-9_-]+) -->\s*$/)?.[1];
       if (!id) continue;
       const result = await this.pool.query("UPDATE review_findings SET github_review_id=$2,github_comment_id=$3,binding_status='bound',updated_at=now() WHERE id=$1 AND job_id=$4 RETURNING id", [id, reviewId, comment.id, job.id]);
       if (result.rowCount) bound.add(id);
@@ -422,7 +426,7 @@ function rowToJob(row: Record<string, unknown>): AgentJob {
 }
 
 function rowToFinding(row: Record<string, any>): StoredFinding {
-  return { id: String(row.id), jobId: String(row.job_id), repositoryId: Number(row.repository_id), prNumber: Number(row.pr_number), headSha: String(row.head_sha), fingerprint: String(row.fingerprint), category: row.category, severity: row.severity, evidenceLevel: row.evidence_level, path: row.path ?? undefined, line: row.line ? Number(row.line) : undefined, side: row.side ?? undefined, description: row.description, evidence: row.evidence, impact: row.impact, suggestion: row.suggestion ?? undefined, memory: row.memory_id ? { id: String(row.memory_id), version: Number(row.memory_version), source: {} } : undefined, status: row.status, githubReviewId: row.github_review_id ? Number(row.github_review_id) : undefined, githubCommentId: row.github_comment_id ? Number(row.github_comment_id) : undefined, bindingStatus: row.binding_status };
+  return { ...row.presentation, id: String(row.id), jobId: String(row.job_id), repositoryId: Number(row.repository_id), prNumber: Number(row.pr_number), headSha: String(row.head_sha), fingerprint: String(row.fingerprint), category: row.category, severity: row.severity, evidenceLevel: row.evidence_level, path: row.path ?? undefined, line: row.line ? Number(row.line) : undefined, side: row.side ?? undefined, description: row.description, evidence: row.evidence, impact: row.impact, suggestion: row.suggestion ?? undefined, memory: row.memory_id ? { ...row.presentation?.memory, id: String(row.memory_id), version: Number(row.memory_version), source: row.presentation?.memory?.source ?? {} } : undefined, status: row.status, githubReviewId: row.github_review_id ? Number(row.github_review_id) : undefined, githubCommentId: row.github_comment_id ? Number(row.github_comment_id) : undefined, bindingStatus: row.binding_status };
 }
 
 export async function transaction<T>(client: PoolClient, run: () => Promise<T>): Promise<T> {

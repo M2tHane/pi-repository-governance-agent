@@ -42,7 +42,7 @@ export interface DelegateContext {
 
 export interface DelegateInput { role: AgentRole; objective: string; focusPaths?: string[]; relevantMemoryIds?: Array<{ id: string; version: number }>; maxTokens: number; timeoutMs: number }
 
-export async function delegateAgent(context: DelegateContext, input: DelegateInput, execute = runAgentReview): Promise<{ role: AgentRole; result: ReviewResult; durationMs: number; model: string; usage: AgentUsage }> {
+export async function delegateAgent(context: DelegateContext, input: DelegateInput, execute = (input: AgentReviewInput) => runAgentReview(input, false)): Promise<{ role: AgentRole; result: ReviewResult; durationMs: number; model: string; usage: AgentUsage }> {
   context.signal.throwIfAborted();
   if (Object.keys(input).some((key) => !["role", "objective", "focusPaths", "relevantMemoryIds", "maxTokens", "timeoutMs"].includes(key))) throw new Error("delegate input rejected");
   if (context.depth >= 1 || !context.allowedRoles.includes(input.role) || !Object.hasOwn(roleRegistry, input.role)) throw new Error("delegate role or depth rejected");
@@ -62,14 +62,19 @@ export async function delegateAgent(context: DelegateContext, input: DelegateInp
     const selectedMemories = input.relevantMemoryIds?.length ? input.relevantMemoryIds.map((item) => recalled.get(`${item.id}:${item.version}`)!) : context.memories;
     run = await execute({ root: context.root, provider: context.config.modelProvider, modelName: context.config.modelName, apiKey: context.config.modelApiKey, timeoutMs: input.timeoutMs, title: context.job.title, body: `${context.job.body}\n\n专项目标：${input.objective}`, baseSha: context.job.baseSha, headSha: context.job.headSha, changedFiles: selectedFiles, memories: selectedMemories, outputLanguage: context.outputLanguage, budgetTokens: input.maxTokens, systemPrompt: roleRegistry[input.role], signal: context.signal, ledger: context.ledger });
     context.signal.throwIfAborted();
-    for (const finding of run.result.findings) if (finding.path && !paths.has(finding.path)) throw new Error("child finding path outside current change");
+    const findings = run.result.findings.flatMap(finding => [finding, ...(finding.candidates ?? [])]);
+    const locations = [...findings, ...run.result.findings.flatMap(finding => finding.relatedLocations ?? [])];
+    for (const finding of locations) if (finding.path && !paths.has(finding.path)) throw new Error("child finding path outside current change");
     const lines = diffLines(context.files);
-    for (const finding of run.result.findings) normalizeFindingLocation(finding, lines);
+    for (const finding of locations) normalizeFindingLocation(finding, lines);
     const memoryById = new Map(selectedMemories.map((memory) => [`${memory.id}:${memory.version}`, memory]));
-    for (const finding of run.result.findings) if (finding.memory) {
+    for (const finding of findings) {
+      if (["team_rule", "memory_conflict"].includes(finding.category) && !finding.memory) throw new Error("child team rule missing Memory reference");
+      if (!finding.memory) continue;
       const memory = memoryById.get(`${finding.memory.id}:${finding.memory.version}`);
       if (!memory || memory.status !== "ACTIVE" || memory.repositoryId !== context.job.repositoryId) throw new Error("child Memory reference invalid");
       finding.memory.source = memory.source;
+      finding.memory.title = memory.title;
     }
     await context.database.finishAgentRun(runId, { status: "succeeded", model: run.model, usage: run.usage, coverage: run.result.coverage, limitations: run.result.limitations });
     return { role: input.role, ...run };

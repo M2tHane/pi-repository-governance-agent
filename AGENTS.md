@@ -6,9 +6,9 @@
 
 ## 授权范围与当前阶段
 
-先确认本次用户授权。规划、评审或文档请求不自动授权业务实现或真实 GitHub 写操作。已经明确的决定直接落实；只有需求冲突或必须由用户选择的重大新取舍才停止说明。
+先根据本次请求和既有上下文判断授权范围；已授权的工作直接执行，不重复询问。规划、评审或文档请求不自动授权业务实现或真实 GitHub 写操作。已经明确的决定直接落实；只有需求冲突或必须由用户选择的重大新取舍才停止说明。
 
-当前按用户授权推进 **M3：Health Auditor、手动／定时健康检查与报告趋势**，实际进度以 [M3 清单](docs/tasks/M3.md) 为准。M0、M1 的历史完成证据保留；M2 的人工增益确认仍以 [M2 清单](docs/tasks/M2.md) 为准，进入 M3 不代表 M2 已验收完成。不要依据旧阶段的“未实现”描述回退已有能力。
+当前能力基线为 **PR Review 与团队规则体验收口后的实现**，实际进度及后续检查以 [UX 清单](docs/tasks/UX.md) 为准；M3 的实现与验收保留在 [M3 清单](docs/tasks/M3.md)。M0、M1 的历史完成证据保留；M2 的人工增益确认仍以 [M2 清单](docs/tasks/M2.md) 为准，进入 M3 不代表 M2 已验收完成。不要依据旧阶段的“未实现”描述回退已有能力。
 
 产品闭环：
 
@@ -24,14 +24,15 @@ M3 的产品范围见 [PRD-MVP 的 F06](docs/PRD-MVP.md#f06仓库健康检查与
 ## 文档入口与开工顺序
 
 1. 先读当前任务清单，再读直接相关的专题设计。
-2. 检查工作区已有改动，保留用户和前序任务的工作。
+2. 检查 `git status --short` 与相关差异，包含未跟踪文件；保留用户和前序任务的工作。HEAD 不代表已有未提交功能的全部基线。
 3. 理解调用路径后做最小改动；非平凡逻辑保留可重复验证。
 4. 任务状态、阻塞和完成证据只写入所属阶段的任务清单，不把未经运行的内容标成完成。
 
 | 内容 | 入口 |
 | --- | --- |
 | 产品与阶段范围 | [PRD-MVP](docs/PRD-MVP.md) |
-| M3 当前任务和证据 | [M3](docs/tasks/M3.md) |
+| 体验收口当前任务和证据 | [UX](docs/tasks/UX.md) |
+| M3 任务和证据 | [M3](docs/tasks/M3.md) |
 | M2 实现证据与待确认验收 | [M2](docs/tasks/M2.md) |
 | 历史验收 | [M0](docs/tasks/M0.md)、[M1](docs/tasks/M1.md) |
 | Agent / Session / Tools / 输出 | [architecture](docs/architecture.md) |
@@ -39,7 +40,9 @@ M3 的产品范围见 [PRD-MVP 的 F06](docs/PRD-MVP.md#f06仓库健康检查与
 | Memory 生命周期与检索 | [memory-design](docs/memory-design.md) |
 | 幂等、恢复、安全与预算 | [reliability-security](docs/reliability-security.md) |
 
-代码定位优先使用 `rg`。如果仓库根目录已经存在 `.codegraph/`，先用 `codegraph explore` 或 `codegraph_explore` 理解符号与调用路径；没有索引则跳过，不自行建立索引。
+如果仓库根目录已经存在 `.codegraph/`，先用 `codegraph explore` 或 `codegraph_explore` 理解符号与调用路径，再用 `rg` 补充未展示的源码。索引可能未覆盖未提交的新文件，检索缺失不等于代码不存在。没有索引则直接使用 `rg`，不自行建立索引。
+
+常用入口：`src/app.ts` 接收事件，`src/main.ts` 组装服务，`src/runner.ts` 领取任务，`src/service.ts` 发布 Review，`src/presentation.ts` 聚合与短评展示，`src/admin.ts` 和 `admin/app.tsx` 提供管理 API 与界面。数据库变更使用 `migrations/` 中的增量迁移；不要改写已执行迁移。
 
 项目说明和 Notes 默认使用中文；代码标识、类型、工具名、事件和协议字段保留英文。
 
@@ -131,6 +134,10 @@ npm run test:db
 npm run check:docs
 npm audit --audit-level=high
 ```
+
+`npm test` 与 `npm run test:db` 都包含构建，顺序运行，避免并发写入 `dist/`。`test:db` 需要可连接的 `DATABASE_URL`；所有数据库用例被 skip 不能记作数据库验证通过。`check:docs` 检查 Notes 结构、格式，以及根目录 Markdown、`docs/`、`.agents/notes/` 中的本地文件链接与 Markdown 标题锚点；遵守 Git 忽略规则，覆盖未跟踪的新文档，不访问外部 URL。它不判断文档语义或远端链接可用性。
+
+`npm start` 运行已有 `dist/`；`npm run dev` 仅启动前构建一次，再监听编译产物，修改 TypeScript／React／CSS 后需重新构建。不要为验证启动连接真实队列的 `src/main.ts`。
 
 数据库测试使用独立临时 schema，不能让测试 Runner 领取真实任务。模型和 GitHub 默认使用替身；真实模型对照使用固定 SHA 并单独记录，不冒充真实 Webhook 验收。
 

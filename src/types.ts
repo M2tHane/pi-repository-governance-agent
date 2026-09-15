@@ -49,6 +49,11 @@ export type EvidenceLevel = "weak" | "moderate" | "strong";
 export type FindingStatus = "OPEN" | "NEEDS_CLARIFICATION" | "STILL_VALID" | "FIXED" | "WITHDRAWN" | "EXCEPTION_PENDING";
 
 export interface Finding {
+  candidates?: Finding[];
+  reviewerRole?: AgentRole;
+  display?: import("./presentation.js").FindingDisplay;
+  relatedLocations?: Array<{ path?: string; line?: number; side?: "LEFT" | "RIGHT" }>;
+  mergedCount?: number;
   path?: string;
   line?: number;
   side?: "LEFT" | "RIGHT";
@@ -59,7 +64,7 @@ export interface Finding {
   evidence: string;
   impact: string;
   suggestion?: string;
-  memory?: { id: string; version: number; source: { pullRequestNumber?: number; commentIds?: number[] } };
+  memory?: { id: string; version: number; title?: string; source: { pullRequestNumber?: number; commentIds?: number[] } };
 }
 
 export interface HealthScope {
@@ -160,6 +165,7 @@ export interface DecisionProposal {
 }
 
 export interface MemoryRecord {
+  activeVersion?: number;
   id: string;
   version: number;
   repositoryId: number;
