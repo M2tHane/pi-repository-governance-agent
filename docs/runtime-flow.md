@@ -2,6 +2,8 @@
 
 依据代码提交 `902b570`，核对日期：2026-09-16。本文解释当前实现，不把设计目标当作已有功能。
 
+如果还不熟悉数据库、Session 或 Pi 扩展，建议先读 [项目理解指南](project-guide.md)，再阅读本文的具体行为问答。
+
 [可编辑 draw.io 流程图](diagrams/pr-review-memory-flow.drawio) · [PNG 预览](diagrams/pr-review-memory-flow.png)
 
 ![PR Review 与 Team Memory 闭环](diagrams/pr-review-memory-flow.png)

@@ -2,6 +2,8 @@
 
 帮助团队 Review PR，并记住已经确认的工程决定。开发者在 PR 里查看简短问题与建议，维护者在管理页确认团队规则。底层使用 TypeScript、GitHub App、固定提交的只读 Workspace 与 Pi。
 
+第一次了解项目，先读 [项目理解指南](docs/project-guide.md)：用具体 PR 解释整体流程、数据库各表、Pi 调用与扩展，并提供主要枚举值的中文对照。
+
 服务支持 inline finding、线程复核、按需多 Agent、共享预算，以及 M3 的仓库健康检查与历史报告。本轮体验收口与验证见 [UX 清单](docs/tasks/UX.md)，健康检查实现记录见 [M3 清单](docs/tasks/M3.md)；M2 的独立人工验收状态见 [M2 清单](docs/tasks/M2.md)。
 
 ## 启动

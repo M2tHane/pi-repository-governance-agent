@@ -154,3 +154,11 @@ ego-browser TaskSpace 3；使用独立 `ux_preview_*` schema 和 OAuth 替身，
 - 按源码核对并补充 [实际流程说明](../runtime-flow.md) 与 [可编辑 draw.io 图](../diagrams/pr-review-memory-flow.drawio)。XML 节点 ID / 连线引用校验通过；本机 draw.io 31.4.4 实际导出 PNG，并目视确认布局和中文显示完整。
 - 本轮不恢复浏览器操作、不调用真实模型、不创建 GitHub 评论。原有 `.codegraph/`、`.serena/` 与 walkthrough 文件保留在本地，不纳入本次代码提交。
 - 运行路径说明明确区分当前限制：无多人投票或身份优先级、无纯代码自动激活 Memory、无自动模型切换／完整 uncertain 对账，Decision Extractor 尚未统一预算与取消封装。此次仅说明，不扩大为额外功能实现。
+
+### 2026-09-16：项目理解指南
+
+新增 [项目理解指南](../project-guide.md)，面向首次理解实现的读者，说明四类任务、数据库十二张表、Session 与 Team Memory 的区别、Pi 调用循环、受控工具、多 Agent 协作、SDK 扩展能力及中文枚举字典。README 和运行流程问答已加入入口。
+
+依据代码基线 `262d607` 与本地 Pi SDK `0.85.1` 文档核对；区分已启用能力与 SDK 可选扩展，明确检索、多人讨论、提取器统一预算／审计和发布不确定性的当前限制。
+
+验证：`npm run check:docs` 通过（8 篇 Note、23 个 Markdown 文件）；`git diff --check` 通过。此次仅修改说明文档，未运行构建、业务测试、数据库测试和依赖审计；未使用浏览器、调用业务模型或写入 GitHub，因此无新增 delivery／Job／finding／Review／reply、模型角色、耗时与 usage 记录。
