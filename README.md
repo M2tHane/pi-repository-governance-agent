@@ -107,3 +107,5 @@ node --env-file=.env scripts/evaluate-ux.mjs
 结果保存到 `work/ux-model-evaluation.json`。可附 `orders-single`、`orders-main` 或 `rule-reference` 单独运行，结果按样本另存。它只读取数据库中的规则并调用模型；Main 样本显式调用编排，partial 状态原样记录。
 
 产品范围见 [PRD-MVP](docs/PRD-MVP.md)，实现分层见 [architecture](docs/architecture.md)，安全与恢复见 [reliability-security](docs/reliability-security.md)。
+
+运行机制、多人回复、规则提取与错误兜底见 [实际流程说明与 draw.io 图](docs/runtime-flow.md)。

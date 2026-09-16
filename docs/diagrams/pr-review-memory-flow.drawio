@@ -1,0 +1,189 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="Electron" version="31.4.4" type="device">
+  <diagram id="governance-runtime" name="PR Review 与 Team Memory 闭环">
+    <mxGraphModel dx="1500" dy="1500" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="1500" math="0" shadow="0" background="#ffffff">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="&lt;b&gt;PR Review → 人类复核 → Team Memory&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=none;fontSize=30;align=left;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="50" y="20" width="1400" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="按当前实现绘制 · 代码基线 902b570 · 2026-09-15" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=none;fontSize=15;fontColor=#64748B;align=left;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="50" y="70" width="1400" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="r-lane" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#EFF6FF;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="40" y="110" width="460" height="1145" as="geometry" />
+        </mxCell>
+        <mxCell id="r-heading" value="&lt;b&gt;01 · 审查 PR&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#EFF6FF;strokeColor=none;fontSize=21;align=left;fontColor=#2563EB;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="65" y="125" width="410" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="p-lane" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#F0FDFA;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="520" y="110" width="460" height="1145" as="geometry" />
+        </mxCell>
+        <mxCell id="p-heading" value="&lt;b&gt;02 · 处理多人回复&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#F0FDFA;strokeColor=none;fontSize=21;align=left;fontColor=#0D9488;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="545" y="125" width="410" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m-lane" value="" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFBEB;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="110" width="460" height="1145" as="geometry" />
+        </mxCell>
+        <mxCell id="m-heading" value="&lt;b&gt;03 · 提取并确认规则&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFBEB;strokeColor=none;fontSize=21;align=left;fontColor=#D97706;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="1025" y="125" width="410" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="r-event" value="用户创建 / 更新 / 重新打开 PR&lt;br&gt;opened · synchronize · reopened · ready_for_review" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#DBEAFE;strokeColor=#93C5FD;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="70" y="175" width="400" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="p-event" value="&lt;b&gt;人类回复 App 已绑定的行内意见&lt;/b&gt;&lt;br&gt;同一 PR、同一线程允许多名用户" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#CCFBF1;strokeColor=#5EEAD4;" vertex="1" parent="1">
+          <mxGeometry x="550" y="175" width="400" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="m-event" value="&lt;b&gt;PR 已合并&lt;/b&gt;&lt;br&gt;closed 且 merged = true" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FEF3C7;strokeColor=#FCD34D;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="175" width="400" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="ingress" value="&lt;b&gt;GitHub App → Webhook 验签 → 确定性路由与去重 → PostgreSQL Job → 单 Worker&lt;/b&gt;&lt;br&gt;检查事件类型、仓库授权与状态；普通 issue_comment 不进入实时 Reply Handler" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#172B4D;strokeColor=#172B4D;fontColor=#FFFFFF;fontSize=17;" vertex="1" parent="1">
+          <mxGeometry x="60" y="280" width="1380" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="event-r" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.15;entryY=0;" edge="1" parent="1" source="r-event" target="ingress">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="event-p" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="p-event" target="ingress">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="event-m" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.85;entryY=0;" edge="1" parent="1" source="m-event" target="ingress">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r1" value="&lt;b&gt;PR_REVIEW：固定代码快照&lt;/b&gt;&lt;br&gt;绑定 base / head SHA，读取变更文件与 diff" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#93C5FD;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="70" y="390" width="400" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="r2" value="&lt;b&gt;先召回 Team Memory&lt;/b&gt;&lt;br&gt;同仓库 ACTIVE → Scope 过滤&lt;br&gt;标题 / 描述 / diff 关键词排序 → 默认前 10 条" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#93C5FD;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="70" y="500" width="400" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="r3" value="&lt;b&gt;模型读代码并做语义判断&lt;/b&gt;&lt;br&gt;diff + read_file / search_text + 已召回规则&lt;br&gt;简单 PR 单 Agent；复杂 PR 可 Main + 专项" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#93C5FD;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="70" y="635" width="400" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="r4" value="&lt;b&gt;服务校验与发布前复查&lt;/b&gt;&lt;br&gt;结构、路径、规则 ID / version、分组完整性&lt;br&gt;当前 head、open、非 Draft、仓库 enabled" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#93C5FD;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="70" y="770" width="400" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="r5" value="&lt;b&gt;发布 COMMENT Review&lt;/b&gt;&lt;br&gt;可定位 → inline finding；否则 → summary&lt;br&gt;记录 finding 与 GitHub 线程绑定" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#93C5FD;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="70" y="905" width="400" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="r6" value="&lt;b&gt;用户在 PR 查看问题与建议&lt;/b&gt;&lt;br&gt;可在线程中解释、提出例外或提交修复&lt;br&gt;新 head 会触发新的审查" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#93C5FD;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="70" y="1050" width="400" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="p1" value="&lt;b&gt;REPLY_HANDLE：记录每条回复&lt;/b&gt;&lt;br&gt;source comment 去重，按 GitHub 时间处理" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#5EEAD4;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="550" y="390" width="400" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="p2" value="&lt;b&gt;重读当前代码与完整相关线程&lt;/b&gt;&lt;br&gt;原 finding + 本次回复 + 多人讨论&lt;br&gt;同时读取关联规则与召回规则" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#5EEAD4;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="550" y="500" width="400" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="p3" value="&lt;b&gt;模型根据代码证据复核&lt;/b&gt;&lt;br&gt;不按人数投票，不按评论者身份定输赢&lt;br&gt;证据不足 → 请求澄清" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#5EEAD4;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="550" y="635" width="400" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="p4" value="&lt;b&gt;五类结论&lt;/b&gt;&lt;br&gt;FIXED · MISJUDGMENT · STILL_VALID&lt;br&gt;VALID_EXCEPTION · NEEDS_CLARIFICATION" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#5EEAD4;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="550" y="770" width="400" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="p5" value="&lt;b&gt;在原线程回复并保存状态&lt;/b&gt;&lt;br&gt;新 head → 重排同一 source comment&lt;br&gt;迟到的旧回复不能回退已发布的新判断" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#5EEAD4;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="550" y="905" width="400" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="p6" value="&lt;b&gt;例外 / 规则变化只形成 decision clue&lt;/b&gt;&lt;br&gt;不直接改变 ACTIVE Memory&lt;br&gt;等待 PR 合并后提取及维护者确认" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#5EEAD4;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="550" y="1050" width="400" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="m1" value="&lt;b&gt;DECISION_EXTRACT：读取合并快照&lt;/b&gt;&lt;br&gt;最终代码 + PR 讨论 / reviews + 决策线索" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#FCD34D;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="390" width="400" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="m2" value="&lt;b&gt;模型提取可复用的工程决定&lt;/b&gt;&lt;br&gt;要求明确的人类决定 + 代码证据&lt;br&gt;仅有代码写法 / AI 意见 / 未决争议 → 省略" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#FCD34D;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="500" width="400" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="m3" value="&lt;b&gt;服务校验结构与来源&lt;/b&gt;&lt;br&gt;PR、merge SHA、人类 comment ID&lt;br&gt;代码证据所属变更路径" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#FCD34D;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="635" width="400" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="m4" value="&lt;b&gt;保存 CANDIDATE&lt;/b&gt;&lt;br&gt;包含内容、Scope、来源、依据与不确定项&lt;br&gt;不自动生效" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#FCD34D;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="770" width="400" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="m5" value="&lt;b&gt;维护者在管理页决定&lt;/b&gt;&lt;br&gt;OAuth maintain / admin 权限 + CSRF&lt;br&gt;编辑、确认、忽略或替代；保存版本与审计" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#FCD34D;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="905" width="400" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="m6" value="&lt;b&gt;ACTIVE Team Memory&lt;/b&gt;&lt;br&gt;存储在 PostgreSQL&lt;br&gt;供未来 PR 按 Scope 与关键词召回" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=#FCD34D;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="1050" width="400" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="route-r" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.15;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="ingress" target="r1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r1-2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="r1" target="r2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r2-3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="r2" target="r3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r3-4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="r3" target="r4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r4-5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="r4" target="r5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r5-6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="r5" target="r6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="route-p" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="ingress" target="p1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p1-2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="p1" target="p2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p2-3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="p2" target="p3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p3-4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="p3" target="p4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p4-5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="p4" target="p5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="p5-6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="p5" target="p6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="route-m" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.85;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="ingress" target="m1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="m1-2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="m1" target="m2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="m2-3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="m2" target="m3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="m3-4" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="m3" target="m4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="m4-5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="m4" target="m5">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="m5-6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="m5" target="m6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="r-note" value="&lt;b&gt;不只查规则矛盾&lt;/b&gt;&lt;br&gt;也检查正确性、安全与可维护性。&lt;br&gt;召回是范围 + 词项排序，不是向量检索。" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#EFF6FF;strokeColor=none;fontSize=14;align=left;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="70" y="1170" width="400" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="p-note" value="&lt;b&gt;实时回复边界&lt;/b&gt;&lt;br&gt;普通 PR 评论、其他线程、Bot 不触发。&lt;br&gt;FIXED / WITHDRAWN 后新收到的回复忽略。" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#F0FDFA;strokeColor=none;fontSize=14;align=left;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="550" y="1170" width="400" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="m-note" value="&lt;b&gt;谁决定规则生效？&lt;/b&gt;&lt;br&gt;有权限的维护者；没有投票或多人会签。&lt;br&gt;普通 PR 评论可在合并提取时作为输入。" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFBEB;strokeColor=none;fontSize=14;align=left;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="1170" width="400" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="active-recall" value="未来 PR 复用已确认规则" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeWidth=1.7;strokeColor=#94A3B8;fontFamily=PingFang SC;fontSize=14;fontColor=#475569;labelBackgroundColor=#FFFFFF;dashed=1;strokeColor=#D97706;strokeWidth=2;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="m6" target="r2">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1475" y="1097" />
+              <mxPoint x="1475" y="1280" />
+              <mxPoint x="20" y="1280" />
+              <mxPoint x="20" y="547" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="guards" value="&lt;b&gt;异常与恢复（按执行路径适用）&lt;/b&gt;&lt;br&gt;可识别临时错误：最多 3 次尝试；专项失败：partial；Main 失败：仅保留已校验子结果。&lt;br&gt;输出不合法：拒绝发布；过期 PR：取消 / 重排；发布结果 uncertain：停止重发，等待核对。&lt;br&gt;边界：无自动模型切换、无 exactly-once 保证；Decision Extractor 尚未统一 Review / Reply 的预算与取消机制。" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFF7ED;strokeColor=#FDBA74;fontSize=16;align=left;spacingLeft=20;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1320" width="1380" height="125" as="geometry" />
+        </mxCell>
+        <mxCell id="source" value="依据：src/app.ts · service.ts · memory.ts · reply.ts · decision.ts · database.ts · runner.ts · orchestration.ts" style="rounded=1;whiteSpace=wrap;html=1;arcSize=10;strokeWidth=1.5;fontFamily=PingFang SC;fontSize=17;fontColor=#172B4D;spacing=12;fillColor=#FFFFFF;strokeColor=none;fontSize=13;fontColor=#64748B;align=left;spacing=0;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1460" width="1380" height="25" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

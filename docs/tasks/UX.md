@@ -142,3 +142,15 @@ ego-browser TaskSpace 3；使用独立 `ux_preview_*` schema 和 OAuth 替身，
 | 临时资源回收 | 预览服务正常退出；数据库查询确认预览和测试 schema 均不存在；独立容器停止并自动删除。未操作用户接管后的浏览器空间。 |
 
 本轮没有提交代码。原体验收口及阶段记录保留，M2 的人工收益确认仍待用户判断。
+
+
+## 2026-09-16：提交与运行流程交接
+
+用户授权提交代码并要求解释 PR / Memory / 多人评论 / 失败恢复，补充 draw.io 图。
+
+- 代码提交：`902b570`（`feat: refine PR review UX and bound admin resource usage`），包含体验收口、四项优化及必要测试／文档，共 37 个文件；未推送远端。
+- 提交前重新执行 `npm test`：50 通过、12 个数据库用例由独立命令执行、0 失败（6.09 秒，`work/commit-tests.log`）；独立临时容器执行 `npm run test:db`：13 通过、0 skip、0 失败（2.94 秒，`work/commit-db.log`）。两者均包含 build。
+- `npm run check:docs`、`git diff --cached --check` 通过；`npm audit --audit-level=high` 为 0 漏洞。暂存的 37 个文件未匹配本地凭据值或私钥头。临时数据库容器已停止并自动删除。
+- 按源码核对并补充 [实际流程说明](../runtime-flow.md) 与 [可编辑 draw.io 图](../diagrams/pr-review-memory-flow.drawio)。XML 节点 ID / 连线引用校验通过；本机 draw.io 31.4.4 实际导出 PNG，并目视确认布局和中文显示完整。
+- 本轮不恢复浏览器操作、不调用真实模型、不创建 GitHub 评论。原有 `.codegraph/`、`.serena/` 与 walkthrough 文件保留在本地，不纳入本次代码提交。
+- 运行路径说明明确区分当前限制：无多人投票或身份优先级、无纯代码自动激活 Memory、无自动模型切换／完整 uncertain 对账，Decision Extractor 尚未统一预算与取消封装。此次仅说明，不扩大为额外功能实现。
