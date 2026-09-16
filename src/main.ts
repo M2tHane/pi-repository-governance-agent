@@ -15,7 +15,6 @@ import { GitHubClient } from "./github.js";
 // Note: M2 线程复核、委派与预算取舍 — 见 .agents/notes/proposed/architecture/2026-09-11-m2-reply-and-multi-agent.md
 const config = loadConfig();
 const database = new Database(config.databaseUrl);
-await database.migrate();
 const memories = new MemoryService(database);
 const review = createJobProcessor(config, undefined, database, memories);
 const extract = createDecisionProcessor(config, database);

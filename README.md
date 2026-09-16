@@ -15,12 +15,14 @@ npm ci
 npm run db:up
 ```
 
-复制 [.env.example](.env.example) 为 `.env` 并填写 GitHub App、数据库、模型和 OAuth 配置，然后：
+复制 [.env.example](.env.example) 为 `.env` 并填写 GitHub App、数据库、模型和 OAuth 配置。首次初始化数据库时执行：
 
 ```sh
 npm run migrate
 npm start
 ```
+
+表结构已就绪后，正常启动只需 `npm start`，服务不会自动执行迁移。以后新增数据库结构变更时，再手动运行 `npm run migrate`，成功后启动服务。
 
 `npm run migrate` 会先构建，`npm start` 只运行已有 `dist/`。开发时可使用 `npm run dev`：启动前构建一次，再监听编译产物；修改 `src/` 或 `admin/` 后需另行执行 `npm run build` 并刷新页面。数据库配置与默认本地端口见 [compose.yaml](compose.yaml)。正常服务只有一个 PostgreSQL Worker。
 
@@ -110,4 +112,4 @@ node --env-file=.env scripts/evaluate-ux.mjs
 
 产品范围见 [PRD-MVP](docs/PRD-MVP.md)，实现分层见 [architecture](docs/architecture.md)，安全与恢复见 [reliability-security](docs/reliability-security.md)。
 
-运行机制、多人回复、规则提取与错误兜底见 [实际流程说明与 draw.io 图](docs/runtime-flow.md)。
+完整运行机制和中文枚举见 [项目理解指南](docs/project-guide.md)，流程图提供 [draw.io 源文件](docs/diagrams/pr-review-memory-flow.drawio) 与 [PNG 预览](docs/diagrams/pr-review-memory-flow.png)。

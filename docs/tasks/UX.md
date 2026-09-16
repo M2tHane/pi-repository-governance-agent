@@ -9,7 +9,7 @@
 - [x] UX-03：概览／团队规则／仓库导航；设置收纳运行记录、策略和健康检查；只展示真实健康结论。
 - [x] UX-04：预算／权限／发布回归、真实模型固定样本、桌面／移动端和键盘验证；文档与截图。
 
-范围：复用已有规则来源与生命周期，不新增手工捏造无来源规则、规则使用统计或健康总分。界面里的状态翻译不改变内部状态机。旧截图与 walkthrough.zip 保留为历史证据。
+范围：复用已有规则来源与生命周期，不新增手工捏造无来源规则、规则使用统计或健康总分。界面里的状态翻译不改变内部状态机。旧截图与 walkthrough.zip 保留为本地历史证据，现归档于被忽略的 `work/document-archive/`。
 
 产品要求见 [F02](../PRD-MVP.md#f02pr-自动审查) 和 [F05](../PRD-MVP.md#f05最小管理界面)，实现取舍见 [体验收口 Note](../../.agents/notes/implemented/feature/2026-09-13-review-experience.md)。
 
@@ -151,7 +151,7 @@ ego-browser TaskSpace 3；使用独立 `ux_preview_*` schema 和 OAuth 替身，
 - 代码提交：`902b570`（`feat: refine PR review UX and bound admin resource usage`），包含体验收口、四项优化及必要测试／文档，共 37 个文件；未推送远端。
 - 提交前重新执行 `npm test`：50 通过、12 个数据库用例由独立命令执行、0 失败（6.09 秒，`work/commit-tests.log`）；独立临时容器执行 `npm run test:db`：13 通过、0 skip、0 失败（2.94 秒，`work/commit-db.log`）。两者均包含 build。
 - `npm run check:docs`、`git diff --cached --check` 通过；`npm audit --audit-level=high` 为 0 漏洞。暂存的 37 个文件未匹配本地凭据值或私钥头。临时数据库容器已停止并自动删除。
-- 按源码核对并补充 [实际流程说明](../runtime-flow.md) 与 [可编辑 draw.io 图](../diagrams/pr-review-memory-flow.drawio)。XML 节点 ID / 连线引用校验通过；本机 draw.io 31.4.4 实际导出 PNG，并目视确认布局和中文显示完整。
+- 按源码核对并补充 [实际流程说明（现已并入项目理解指南）](../project-guide.md) 与 [可编辑 draw.io 图](../diagrams/pr-review-memory-flow.drawio)。XML 节点 ID / 连线引用校验通过；本机 draw.io 31.4.4 实际导出 PNG，并目视确认布局和中文显示完整。
 - 本轮不恢复浏览器操作、不调用真实模型、不创建 GitHub 评论。原有 `.codegraph/`、`.serena/` 与 walkthrough 文件保留在本地，不纳入本次代码提交。
 - 运行路径说明明确区分当前限制：无多人投票或身份优先级、无纯代码自动激活 Memory、无自动模型切换／完整 uncertain 对账，Decision Extractor 尚未统一预算与取消封装。此次仅说明，不扩大为额外功能实现。
 
@@ -162,3 +162,15 @@ ego-browser TaskSpace 3；使用独立 `ux_preview_*` schema 和 OAuth 替身，
 依据代码基线 `262d607` 与本地 Pi SDK `0.85.1` 文档核对；区分已启用能力与 SDK 可选扩展，明确检索、多人讨论、提取器统一预算／审计和发布不确定性的当前限制。
 
 验证：`npm run check:docs` 通过（8 篇 Note、23 个 Markdown 文件）；`git diff --check` 通过。此次仅修改说明文档，未运行构建、业务测试、数据库测试和依赖审计；未使用浏览器、调用业务模型或写入 GitHub，因此无新增 delivery／Job／finding／Review／reply、模型角色、耗时与 usage 记录。
+
+### 2026-09-16：移除启动时自动迁移
+
+按用户要求由 Luna（high）子 Agent 删除 `src/main.ts` 的 `await database.migrate()`；保留现有 SQL 与 `npm run migrate` 手动入口供首次初始化和未来升级使用。README 与项目理解指南同步说明日常启动无需迁移。
+
+验证：子 Agent 执行 `npm run build` 通过；主 Agent 复核源码差异，执行 `npm run check:docs`、`git diff --check` 通过。本次为启动调用删除，未运行业务／数据库测试及依赖审计，未启动连接真实队列的服务，未执行真实数据库迁移或 GitHub 发布。无新增业务 delivery／Job／finding／Review／reply、业务模型角色、耗时或 usage 记录。
+
+### 2026-09-16：文档去重与本地资料归档
+
+将 `docs/runtime-flow.md` 的问答统一到项目理解指南，保留补充的提取校验、维护者权限、重试次数和流程图预览，删除重复文件并修复引用。未跟踪的 walkthrough、20 张截图及 ZIP 移至被忽略的 `work/document-archive/`，保留本地历史证据，不纳入 Git。阶段任务清单、专题设计、Notes 和 draw.io 文件保留。
+
+本次提交同时包含前述移除启动自动迁移的改动。实际执行 `npm run build`、`npm run check:docs`（8 篇 Note、21 个 Markdown 文件、129 个本地链接和锚点）、`git diff --check`，均通过。没有运行服务、真实数据库迁移、模型调用或业务 GitHub 发布；未重复运行业务／数据库测试和依赖审计，本轮没有改变业务处理或依赖。无新增业务 SHA／delivery／Job／finding／Review／reply 与 usage。
