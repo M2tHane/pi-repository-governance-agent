@@ -1,4 +1,4 @@
-// Note: 项目文档检查范围，见 .agents/notes/implemented/process/2026-09-10-document-management.md。
+// 检查根目录、docs/ 和长期设计决策中的本地 Markdown 链接。
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -20,11 +20,11 @@ let gitRoot;
 try { gitRoot = execFileSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], {encoding:'utf8',stdio:['ignore','pipe','ignore']}).trim(); } catch {}
 if (gitRoot === root) {
   const paths = execFileSync('git', ['-C', root, 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], {encoding:'utf8'}).split('\0');
-  files = [...new Set(paths)].filter(path => /\.md$/i.test(path) && (!path.includes('/') || path.startsWith('docs/') || path.startsWith('.agents/notes/'))).map(path => join(root,path)).filter(existsSync);
+  files = [...new Set(paths)].filter(path => /\.md$/i.test(path) && (!path.includes('/') || path.startsWith('docs/') || path.startsWith('.agents/decisions/'))).map(path => join(root,path)).filter(existsSync);
 } else {
   files = readdirSync(root).filter(name => /\.md$/i.test(name)).map(name => join(root,name));
   collect(join(root, 'docs'));
-  collect(join(root, '.agents/notes'));
+  collect(join(root, '.agents/decisions'));
 }
 const parsed = new Map();
 const errors = [];

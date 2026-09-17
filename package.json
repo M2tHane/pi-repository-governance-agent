@@ -14,9 +14,7 @@
     "migrate": "npm run build && node --env-file-if-exists=.env dist/src/migrate.js",
     "test": "npm run build && node --test dist/test/*/*.test.js",
     "test:db": "npm run build && node --env-file-if-exists=.env --test dist/test/*/database-*.test.js",
-    "verify-agent-note-tree": "node scripts/verify-agent-note-tree.ts",
-    "verify-agent-note-format": "node scripts/verify-agent-note-format.ts",
-    "check:docs": "npm run verify-agent-note-tree && npm run verify-agent-note-format && node scripts/check-markdown-links.mjs"
+    "check:docs": "node scripts/check-markdown-links.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",

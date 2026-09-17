@@ -10,6 +10,7 @@ import type { AgentRole, ComplexityProfile, OrchestrationSummary, ReviewResult }
 import type { MemoryRecord } from "../memory/types.js";
 import type { ReviewJob } from "../jobs/types.js";
 
+// 选择性委派、共享预算与 partial 的理由见 .agents/decisions/multi-agent-review.md。
 export function complexityProfile(files: AgentReviewInput["changedFiles"], memories: MemoryRecord[]): ComplexityProfile {
   const extensions: Record<string, string> = { ts: "typescript", js: "javascript", java: "java", py: "python" };
   const languages = new Set<string>(), modules = new Set<string>();

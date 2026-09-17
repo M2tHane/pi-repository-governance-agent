@@ -1,4 +1,3 @@
--- Note: 新部署的当前 Schema baseline 与旧库迁移边界，见 .agents/notes/implemented/architecture/2026-09-17-migration-baseline.md。
 CREATE TABLE repositories (
   id bigint PRIMARY KEY,
   installation_id bigint NOT NULL,

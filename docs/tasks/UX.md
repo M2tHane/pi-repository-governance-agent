@@ -11,7 +11,7 @@
 
 范围：复用已有规则来源与生命周期，不新增手工捏造无来源规则、规则使用统计或健康总分。界面里的状态翻译不改变内部状态机。旧截图与 walkthrough.zip 保留为本地历史证据，现归档于被忽略的 `work/document-archive/`。
 
-产品要求见 [F02](../PRD-MVP.md#f02pr-自动审查) 和 [F05](../PRD-MVP.md#f05最小管理界面)，实现取舍见 [体验收口 Note](../../.agents/notes/implemented/feature/2026-09-13-review-experience.md)。
+产品要求见 [F02](../PRD-MVP.md#f02pr-自动审查) 和 [F05](../PRD-MVP.md#f05最小管理界面)，实现细节见 [架构说明](../architecture.md)。
 
 ## 完成证据
 
@@ -91,7 +91,7 @@ ego-browser TaskSpace 3；使用独立 `ux_preview_*` schema 和 OAuth 替身，
 | P1 | [OAuth 状态管理](../../src/admin/handler.ts)：`states` 每次访问 `/auth/github` 都新增条目，仅成功校验的 callback 删除；放弃登录的过期 state 不回收。`sessions` 仅在该 session 再次访问或退出时删除。长期运行下内存随历史登录请求累积。 | 给 state/session 增加过期回收及容量边界；用可控时间验证无人回访的过期记录被删除，合法 OAuth 与会话仍正常。不需要引入 Redis。 |
 | P2 | [讨论 API](../../src/admin/findings.routes.ts) 的 `/api/findings` 无 LIMIT／分页；[DiscussionPage](../../frontend/app.tsx) 一次请求全部 finding、回复与 clue。历史数据增长会扩大查询、响应和渲染成本。 | 增加稳定排序与游标分页，按仓库或 Job 筛选；大量 finding／多回复样本验证跨页无重复遗漏，权限隔离不变。当前未做压力测试，不宣称已有线上性能故障。 |
 | P2 | [管理页加载](../../frontend/app.tsx) 并行请求 repositories、jobs、memories；三个端点各自调用 [allowedRepositories](../../src/admin/repository.service.ts)，每次又串行向 GitHub 检查所有仓库权限。N 个仓库的首次加载约产生 3N 次权限查询。 | 在同一次加载的并发请求间合并权限查询，或提供一次授权后的聚合读取；限制并发数，不能用长期缓存延迟权限撤销。以替身统计调用次数，并覆盖失权及 API 失败路径。 |
-| P2 | [文档检查脚本](../../scripts/verify-agent-note-tree.ts) 只检查 Note 树内部文件链接，跳过标题锚点；README 与 docs 链接失效不会使 `check:docs` 失败。 | 后续扩展 Markdown 文件／锚点检查，正确忽略代码围栏与外部 URL；用不存在的文件及标题做失败样本。本次已先修正文档对命令覆盖面的描述。 |
+| P2 | 当时的文档检查仅覆盖旧决策记录，跳过 README 与 docs 的标题锚点；失效链接不会使 `check:docs` 失败。 | 后续扩展 Markdown 文件／锚点检查，正确忽略代码围栏与外部 URL；用不存在的文件及标题做失败样本。本次已先修正文档对命令覆盖面的描述。 |
 
 以上为定向源码检查，覆盖管理页数据读取、OAuth 生命周期、构建与文档入口，并非全仓库安全审计。M2 的人工质量收益判断仍需维护者完成，不能用本次测试代替。
 
@@ -116,7 +116,7 @@ ego-browser TaskSpace 3；使用独立 `ux_preview_*` schema 和 OAuth 替身，
 - [x] OPT-03：聚合加载端点只授权一次，最多 4 项并发权限检查；下一请求重新授权，拒绝结果与上游失败不缓存。
 - [x] OPT-04：统一 Markdown 解析器检查根文档、docs 与 Notes 的文件链接／锚点，尊重 Git 忽略规则；移除旧正则重复检查，接入 check:docs。
 
-设计取舍见 [管理页资源边界 Note](../../.agents/notes/implemented/architecture/2026-09-15-admin-resource-bounds.md) 和 [文档管理 Note](../../.agents/notes/implemented/process/2026-09-10-document-management.md)。API 返回值有变化，需一起构建部署服务和管理页。
+管理页资源边界和文档链接检查的当前实现见 [架构说明](../architecture.md) 与 [链接检查器](../../scripts/check-markdown-links.mjs)。API 返回值有变化，需一起构建部署服务和管理页。
 
 ### 验证范围与限制
 

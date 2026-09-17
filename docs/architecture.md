@@ -4,9 +4,9 @@
 
 > 本文描述系统架构、Agent 分层、工具与副作用边界、输出契约和技术选型。产品范围见 [PRD-MVP.md](./PRD-MVP.md)。
 
-服务沿用一个 Node 进程、一个 PostgreSQL Worker 和固定 SHA Workspace。M2 的独立验收见 [M2](./tasks/M2.md)，M3 的实现与验证见 [M3](./tasks/M3.md)。M2 取舍见 [线程与多 Agent Note](../.agents/notes/proposed/architecture/2026-09-11-m2-reply-and-multi-agent.md)。
+服务沿用一个 Node 进程、一个 PostgreSQL Worker 和固定 SHA Workspace。M2 的独立验收见 [M2](./tasks/M2.md)，M3 的实现与验证见 [M3](./tasks/M3.md)。M2 的长期取舍见 [多 Agent Review 决策](../.agents/decisions/multi-agent-review.md)。
 
-M3 的仓库级任务、报告、调度和持久预算取舍见 [Health Auditor Note](../.agents/notes/implemented/architecture/2026-09-12-m3-health-auditor.md)。
+M3 的仓库级任务、报告、调度和持久预算取舍见 [Health Audit 决策](../.agents/decisions/health-audit.md)。
 
 ## 1. 架构原则
 
@@ -205,7 +205,7 @@ Main 不重复完整审查，最终返回 summary 与候选 key 分组。服务�
 
 服务检查分组完整性、每个成员恰好一次、短评长度、路径与规则引用。单 Agent 与 Main 共用合并逻辑，保存 candidates 原始意见、relatedLocations 与最高严重度；新字段不能由候选伪造。展示结果保存在 jobs.review_result 和 review_findings.presentation，旧数据按历史格式读取。完整审计仅由有仓库维护权限的详情 API 返回。
 
-短评总计最多 120 字符，提示词为字段留出余量。可选代码最多 5 行 / 240 字符；无法通过结构校验的专项按既有 partial 规则处理。摘要位置仍提供可展开的修改建议。设计取舍见 [体验收口 Note](../.agents/notes/implemented/feature/2026-09-13-review-experience.md)。
+短评总计最多 120 字符，提示词为字段留出余量。可选代码最多 5 行 / 240 字符；无法通过结构校验的专项按既有 partial 规则处理。摘要位置仍提供可展开的修改建议。
 
 至少包含：
 
@@ -325,4 +325,4 @@ GitHub App → Webhook → Event Dispatcher → Pi PR Review Agent → GitHub CO
 
 OAuth state 与 session 按 TTL 自动回收，各有 1000 条容量上限。首次加载通过 `GET /api/bootstrap` 在单次请求内复用仓库授权，每批最多 4 个权限查询，不跨请求缓存权限。
 
-`GET /api/findings` 返回 `{ items, nextCursor }`，默认每页 50 条，支持 `limit`（1～50）、`repositoryId`、`jobId` 和 `cursor`。签名游标绑定筛选条件，排序保留微秒时间和大整数回复 ID；每页重新鉴权。管理页与 Review 详情都按需加载讨论，详情的 `finding_statuses` 独立于讨论页。具体取舍见 [管理页资源边界 Note](../.agents/notes/implemented/architecture/2026-09-15-admin-resource-bounds.md)。
+`GET /api/findings` 返回 `{ items, nextCursor }`，默认每页 50 条，支持 `limit`（1～50）、`repositoryId`、`jobId` 和 `cursor`。签名游标绑定筛选条件，排序保留微秒时间和大整数回复 ID；每页重新鉴权。管理页与 Review 详情都按需加载讨论，详情的 `finding_statuses` 独立于讨论页。

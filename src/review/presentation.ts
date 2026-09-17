@@ -14,7 +14,7 @@ export function validateDisplay(value: unknown): asserts value is FindingDisplay
   if (d.language !== undefined && (typeof d.language !== 'string' || !/^[a-zA-Z0-9_+-]{0,20}$/.test(d.language))) throw new Error('短评代码语言无效');
 }
 
-// Note: 开发者短评与审计证据分开，见 .agents/notes/implemented/feature/2026-09-13-review-experience.md。
+// 候选聚合与证据保留的边界见 .agents/decisions/multi-agent-review.md。
 export function mergeFindings(items: Finding[], display?: FindingDisplay): Finding {
   if (!items.length) throw new Error('问题分组不能为空');
   const references = new Set(items.filter(f => f.memory).map(f => f.memory!.id + ':' + f.memory!.version));

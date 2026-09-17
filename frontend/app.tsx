@@ -175,7 +175,6 @@ function RulePanel({item,repository,candidates,busy,action,close,error}:{item:Me
   </>;
 }
 
-// Note: 列表只负责定位，来源与版本逐级展开，见 .agents/notes/implemented/feature/2026-09-13-review-experience.md。
 function Memories({items,repositories,reload,route}:{items:Memory[];repositories:Repo[];reload:()=>Promise<void>;route:string}) {
   const [filter,setFilter]=useState(route==="rules/pending"?"CANDIDATE":"ALL"),[repositoryId,setRepositoryId]=useState("ALL"),[search,setSearch]=useState("");
   const [busy,setBusy]=useState(false),[error,setError]=useState(""),[notice,setNotice]=useState("");

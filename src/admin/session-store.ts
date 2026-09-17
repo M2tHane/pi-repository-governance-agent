@@ -1,4 +1,3 @@
-// Note: 有界会话、单次授权与讨论分页，见 .agents/notes/implemented/architecture/2026-09-15-admin-resource-bounds.md。
 export class ExpiringStore<T> {
   private values = new Map<string, { value: T; expiresAt: number; timer: ReturnType<typeof setTimeout> }>();
   constructor(private ttlMs: number, private capacity: number) {}

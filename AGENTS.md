@@ -44,7 +44,7 @@ M3 的产品范围见 [PRD-MVP 的 F06](docs/PRD-MVP.md#f06仓库健康检查与
 
 常用入口：`src/github/webhook/handler.ts` 接收事件，`src/bootstrap/application.ts` 组装服务，`src/jobs/runner.ts` 领取任务，`src/review/review.publisher.ts` 发布 Review，`src/review/presentation.ts` 聚合与短评展示，`src/admin/handler.ts` 和 `frontend/app.tsx` 提供管理 API 与界面。全新数据库使用 `migrations/001_baseline.sql`；后续使用增量迁移，不要在已有旧迁移记录的数据库直接执行 baseline。
 
-项目说明和 Notes 默认使用中文；代码标识、类型、工具名、事件和协议字段保留英文。
+项目说明和决策文档默认使用中文；代码标识、类型、工具名、事件和协议字段保留英文。
 
 ## GitHub、Job 与副作用
 
@@ -100,28 +100,13 @@ Reply 的 FIXED、MISJUDGMENT、VALID_EXCEPTION、STILL_VALID、NEEDS_CLARIFICAT
 
 真实配置保留在被忽略的本地文件；临时 checkout、日志、截图和复现数据放在 `work/`。本地会话导出可能含联调输入，不能提交。
 
-## Notes 与文档管理
+## Architecture Decisions
 
-职责：PRD 写产品，专题文档写设计，任务清单写状态和证据，Notes 写理由，README 写实际启动方式。重复内容优先改为相对链接。
+职责：AGENTS.md 写当前协作规则与边界，[长期设计决策](.agents/decisions/) 解释核心选择的原因，`docs/` 写完整产品与架构说明，任务清单写状态和证据，README 写启动与使用方式，代码和测试定义当前真实行为。
 
-Notes 固定路径：
+修改相关模块前，只阅读直接相关的 Decision；不要在启动时全量加载。只有设计理由未来很可能再次被质疑或修改、代码无法表达其原因，且涉及核心架构、安全或产品规则时，才新增或修改 Decision。
 
-```text
-.agents/notes/{lifecycle}/{class}/yyyy-mm-dd-topic.md
-```
-
-lifecycle 仅用 proposed / implemented / rejected / archived；class 仅用 feature / bug-fix / simplification / architecture / process / testing。不建空类别或 INDEX.md。
-
-前三行固定为标题、空行、`Status: 生命周期`，第一节为 Problem。每篇都有 Alternatives considered。
-
-- proposed：Problem、Proposal、Alternatives considered、Acceptance criteria、Risks。
-- implemented：Problem、Decision、Alternatives considered、Consequences，可附 Verification；使用现在时，不保留 Proposal / Plan / Acceptance criteria。
-- 同一决定的实现细节变化，原地更新原 Note；不同决定不改写成一篇。
-- 完成验证后再迁移到 implemented，修正状态、正文、入站链接，并在关键源码入口留反向注释。
-- 全面替代的旧 Note 迁入 archived 并冻结；局部替代互相链接。
-- 纯格式或无歧义重命名不新建 Note。不因补 Note 自动提交。
-
-详见 [文档管理决定](.agents/notes/implemented/process/2026-09-10-document-management.md)。
+Decision 使用 Context、Decision、Why、Constraints 四节，保持短而准确。不要记录普通 bug fix、临时实现过程、测试输出、任务状态或 PR/commit 流水账；这些信息留在 Git 历史、测试和任务清单中。
 
 ## 验证与完成
 
@@ -135,7 +120,7 @@ npm run check:docs
 npm audit --audit-level=high
 ```
 
-`npm test` 与 `npm run test:db` 都包含构建，顺序运行，避免并发写入 `dist/`。`test:db` 需要可连接的 `DATABASE_URL`；所有数据库用例被 skip 不能记作数据库验证通过。`check:docs` 检查 Notes 结构、格式，以及根目录 Markdown、`docs/`、`.agents/notes/` 中的本地文件链接与 Markdown 标题锚点；遵守 Git 忽略规则，覆盖未跟踪的新文档，不访问外部 URL。它不判断文档语义或远端链接可用性。
+`npm test` 与 `npm run test:db` 都包含构建，顺序运行，避免并发写入 `dist/`。`test:db` 需要可连接的 `DATABASE_URL`；所有数据库用例被 skip 不能记作数据库验证通过。`check:docs` 检查根目录 Markdown、`docs/`、`.agents/decisions/` 中的本地文件链接与 Markdown 标题锚点；遵守 Git 忽略规则，覆盖未跟踪的新文档，不访问外部 URL。它不判断文档语义或远端链接可用性。
 
 `npm start` 运行已有 `dist/`；`npm run dev` 仅启动前构建一次，再监听编译产物，修改 TypeScript／React／CSS 后需重新构建。不要为验证启动连接真实队列的 `src/main.ts`。
 

@@ -12,10 +12,7 @@ import { enqueueDueHealthJobs } from "../health/health.scheduler.js";
 import { GitHubClient } from "../github/client.js";
 import { createJobDispatcher } from "../jobs/dispatcher.js";
 
-// Note: M0 单服务与受控 Pi 审查边界 — 见 .agents/notes/implemented/architecture/2026-09-10-m0-pi-github-review.md
-// Note: M1 持久任务、Team Memory 与维护者治理 — 见 .agents/notes/implemented/architecture/2026-09-10-m1-team-memory.md
-// Note: M2 线程复核、委派与预算取舍 — 见 .agents/notes/proposed/architecture/2026-09-11-m2-reply-and-multi-agent.md
-// Note: 物理模块边界与单进程装配 — 见 .agents/notes/implemented/architecture/2026-09-17-module-boundaries.md
+// 单进程模块边界的理由见 .agents/decisions/repository-architecture.md。
 export function createApplication() {
   const config = loadConfig();
   const database = new Database(config.databaseUrl);

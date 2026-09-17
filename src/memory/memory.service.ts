@@ -7,6 +7,7 @@ import type { DecisionProposal, MemoryRecord } from "./types.js";
 export interface Actor { id: number; login: string }
 export type CandidatePatch = Partial<Pick<MemoryRecord, "type" | "title" | "content" | "rationale" | "scope" | "uncertainties">>;
 
+// 人类确认与仓库隔离的理由见 .agents/decisions/team-memory.md。
 export class MemoryService {
   constructor(private database: Database) {}
 

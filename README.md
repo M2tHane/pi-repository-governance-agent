@@ -93,7 +93,7 @@ npm audit --audit-level=high
 
 `npm test` 包含构建、Node 内置测试、真实 Pi Session 配合 Provider 替身和本地 Git 样本。`test:db` 从环境或 `.env` 读取 `DATABASE_URL`，在临时 schema 运行并回收，不接触真实任务队列；缺少连接配置会跳过数据库用例，不能据退出码认定验证通过。两个测试命令都会构建，请顺序执行。
 
-`check:docs` 验证 Notes 结构和格式，并检查根目录 Markdown、`docs/`、`.agents/notes/` 的本地文件链接与标题锚点。它遵守 Git 忽略规则，也检查未跟踪的新文档；代码示例、外部 URL 不作本地链接检查。外部链接可用性与文档语义仍需人工复核。文档与优化检查记录见 [UX 清单](docs/tasks/UX.md#2026-09-15文档同步与项目优化检查)。
+`check:docs` 检查根目录 Markdown、`docs/`、`.agents/decisions/` 的本地文件链接与标题锚点。它遵守 Git 忽略规则，也检查未跟踪的新文档；代码示例、外部 URL 不作本地链接检查。外部链接可用性与文档语义仍需人工复核。文档与优化检查记录见 [UX 清单](docs/tasks/UX.md#2026-09-15文档同步与项目优化检查)。
 
 固定对照使用测试仓库提交 `ad75aa1e1f1a3604682af068c2c048da23bbbe7a` 的干净 checkout：
 

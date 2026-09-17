@@ -8,7 +8,7 @@ const exec = promisify(execFile);
 
 export async function withWorkspace<T>(cloneUrl: string, token: string, baseSha: string, headSha: string, run: (root: string) => Promise<T>, options: { signal?: AbortSignal } = {}): Promise<T> {
   options.signal?.throwIfAborted();
-  // Note: GitHub Smart HTTP 认证必须非交互并避免 token 出现在参数中 — 见 .agents/notes/implemented/bug-fix/2026-09-10-git-installation-token-auth.md
+  // 非交互 Git 认证与固定快照的理由见 .agents/decisions/github-workspace-security.md。
   const root = await mkdtemp(join(tmpdir(), "pi-review-"));
   const authorization = Buffer.from(`x-access-token:${token}`).toString("base64");
   const gitEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_COUNT: "3", GIT_CONFIG_KEY_0: "http.extraHeader", GIT_CONFIG_VALUE_0: `Authorization: Basic ${authorization}`, GIT_CONFIG_KEY_1: "core.hooksPath", GIT_CONFIG_VALUE_1: "/dev/null", GIT_CONFIG_KEY_2: "credential.helper", GIT_CONFIG_VALUE_2: "" };

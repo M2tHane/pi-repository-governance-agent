@@ -10,6 +10,7 @@ test('Markdown checks files, Chinese/duplicate anchors, references and skips fen
   const root=mkdtempSync(resolve('work/docs-links-'));
   try {
     mkdirSync(join(root,'docs'));
+    mkdirSync(join(root,'.agents','decisions'),{recursive:true});
     assert.equal(spawnSync('git',['init','--quiet',root]).status,0);
     writeFileSync(join(root,'.gitignore'),'codex-session-*.md\n');
     writeFileSync(join(root,'codex-session-private.md'),'[ignored](missing-secret.md)\n');
@@ -17,6 +18,7 @@ test('Markdown checks files, Chinese/duplicate anchors, references and skips fen
     writeFileSync(join(root,'docs/with space.md'),'# 空格\n');
     const valid='# 首页\n\n[中文](docs/target.md#中文标题)\n[重复](docs/target.md#hello-code-1)\n[literal](docs/target.md#amp)\n[entity](docs/target.md#a--b)\n[setext](docs/target.md#setext)\n[html](docs/target.md#custom)\n[空格](<docs/with space.md#空格>)\n[自引](#首页)\n[ref][target]\n\n[target]: docs/target.md#hello-code\n\n[remote](https://example.invalid/nope)\n`[inline](missing.md)`\n\n```md\n[example](missing.md)\n```\n\n~~~md\n[example](missing2.md)\n~~~\n';
     writeFileSync(join(root,'README.md'),valid);
+    writeFileSync(join(root,'.agents/decisions/architecture.md'),'# Decision\n\n[related](../../docs/target.md#中文标题)\n');
     let result=spawnSync(process.execPath,[checker,root],{encoding:'utf8'});
     assert.equal(result.status,0,result.stdout+result.stderr);
     for(const bad of ['![bad](missing.png)','[bad](missing.md)','[bad](docs/target.md#missing)','[bad](#missing)','[ref][bad]\n\n[bad]: docs/target.md#missing']) {
@@ -24,5 +26,9 @@ test('Markdown checks files, Chinese/duplicate anchors, references and skips fen
       result=spawnSync(process.execPath,[checker,root],{encoding:'utf8'});
       assert.equal(result.status,1,result.stdout+result.stderr);assert.match(result.stderr,/README.md/);
     }
+    writeFileSync(join(root,'README.md'),valid);
+    writeFileSync(join(root,'.agents/decisions/architecture.md'),'# Decision\n\n[missing](missing.md)\n');
+    result=spawnSync(process.execPath,[checker,root],{encoding:'utf8'});
+    assert.equal(result.status,1,result.stdout+result.stderr);assert.match(result.stderr,/\.agents\/decisions\/architecture\.md/);
   } finally {rmSync(root,{recursive:true,force:true});}
 });

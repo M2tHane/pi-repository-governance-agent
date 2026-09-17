@@ -21,6 +21,7 @@ async function authorizedHealthJob(config: Config, database: Database, job: Heal
   return Boolean(row?.enabled && Number(row.installation_id) === job.installationId && String(row.full_name).toLowerCase() === job.repository.toLowerCase());
 }
 
+// 独立只读 Job 与报告边界的理由见 .agents/decisions/health-audit.md。
 export function createHealthProcessor(config: Config, database: Database, memories: MemoryService, github = new GitHubClient(config.appId, config.privateKey), execute = runAgentSession) {
   return async (job: HealthJob) => {
     const existing = await database.getHealthReport(job.id);
