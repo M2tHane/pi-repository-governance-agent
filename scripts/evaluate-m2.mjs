@@ -4,9 +4,9 @@ import { promisify } from "node:util";
 import { resolve, join } from "node:path";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { runAgentReview } from "../dist/src/review.js";
-import { complexityProfile, orchestrateReview, shouldOrchestrate } from "../dist/src/orchestration.js";
-import { validateMemoryReferences } from "../dist/src/service.js";
+import { runAgentReview } from "../dist/src/review/agent.js";
+import { complexityProfile, orchestrateReview, shouldOrchestrate } from "../dist/src/review/orchestration.js";
+import { validateMemoryReferences } from "../dist/src/review/review.processor.js";
 
 const exec = promisify(execFile);
 const root = resolve(process.argv[2] ?? "work/m2-eval-snapshot");

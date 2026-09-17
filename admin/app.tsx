@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { Finding, HealthDimension, HealthReport, MemoryRecord as Memory, ReviewResult } from "../src/types.js";
-import type { AgentUsage } from "../src/review.js";
-import type { compareHealthReports } from "../src/health.js";
-import { displayFinding, shortText } from "../src/presentation.js";
+import type { Finding, ReviewResult } from "../src/review/types.js";
+import type { HealthDimension, HealthReport } from "../src/health/types.js";
+import type { MemoryRecord as Memory } from "../src/memory/types.js";
+import type { AgentUsage } from "../src/review/agent.js";
+import type { compareHealthReports } from "../src/health/health.service.js";
+import { displayFinding, shortText } from "../src/review/presentation.js";
 
 type Repo = { id:number; fullName:string; installationId:number; enabled:boolean; includePaths:string[]; excludePaths:string[]; outputLanguage:string; budgetTokens:number; reviewMode:"single"|"auto"; maxDelegates:number; healthSchedule:"off"|"daily"|"weekly"; healthNextRunAt:string|null; healthLastError:string|null };
 type Job = Record<string, any>;

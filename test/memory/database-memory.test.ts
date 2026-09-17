@@ -1,0 +1,71 @@
+import assert from "node:assert/strict";
+import test, { before, after } from "node:test";
+import { createHmac, randomUUID } from "node:crypto";
+import { Database } from "../../src/persistence/database.js";
+import { PersistentRunner } from "../../src/jobs/runner.js";
+import { MemoryService } from "../../src/memory/memory.service.js";
+import type { DecisionProposal } from "../../src/memory/types.js";
+import type { ReplyResult } from "../../src/reply/types.js";
+import type { ReviewJob } from "../../src/jobs/types.js";
+import { createServer } from "node:http";
+import { createAdminHandler } from "../../src/admin/handler.js";
+import type { Config } from "../../src/config/config.js";
+import { execFileSync } from "node:child_process";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { emptyUsage } from "../../src/review/agent.js";
+import { groupFindings } from "../../src/review/presentation.js";
+import { GitHubApiError } from "../../src/github/client.js";
+import { createApp } from "../../src/github/webhook/handler.js";
+import { useTestDatabase, waitFor } from "../helpers/database.js";
+
+const fixture = useTestDatabase();
+
+test("Memory 生命周期、版本、幂等和 Scope/仓库隔离", { skip: !fixture.url }, async () => {
+  const repositoryId = 9_000_000_005;
+  const database = new Database(fixture.url!);
+  const service = new MemoryService(database);
+  const actor = { id: 42, login: "maintainer" };
+  const job = { id: "00000000-0000-4000-8000-000000000005", deliveryId: "memory-source", jobType: "DECISION_EXTRACT", installationId: 1, repositoryId, repository: "owner/memory-test", cloneUrl: "url", prNumber: 8, title: "", body: "", baseSha: "base", headSha: "merged", status: "running" } satisfies ReviewJob;
+  const proposal: DecisionProposal = { type: "coding_convention", title: "DTO Optional", content: "Public DTO fields do not use Optional", rationale: "Stable serialization", scope: { paths: ["backend/**/dto/**"], languages: ["java"] }, source: { pullRequestNumber: 8, commitSha: "merged", commentIds: [10] }, evidence: [{ kind: "human_comment", reference: "10", detail: "decision" }, { kind: "code", reference: "backend/a/dto/X.java:2", detail: "change" }], confidence: 0.9, uncertainties: [] };
+  await database.pool.query("INSERT INTO repositories(id,installation_id,full_name) VALUES($1,1,'owner/memory-test') ON CONFLICT DO NOTHING", [repositoryId]);
+  try {
+    const ids = await database.insertCandidates(job, [proposal]);
+    assert.equal(ids.length, 1);
+    assert.deepEqual(await database.insertCandidates(job, [proposal]), []);
+    const id = ids[0]!;
+    assert.equal((await service.get(repositoryId + 1, id)), undefined);
+    assert.equal((await service.transition(repositoryId, id, "approve", actor)).status, "ACTIVE");
+    assert.equal((await service.retrieve(repositoryId, { paths: ["backend/a/dto/X.java"], text: "Optional DTO" })).length, 1);
+    assert.equal((await service.retrieve(repositoryId, { paths: ["frontend/X.java"], text: "Optional DTO" })).length, 0);
+    const edited = await service.edit(repositoryId, id, { content: "Public DTO fields never use Optional" }, actor);
+    assert.equal(edited.version, 2);
+    assert.equal(edited.status, "CANDIDATE");
+    assert.equal((await service.retrieve(repositoryId, { paths: ["backend/a/dto/X.java"], text: "Optional DTO" }))[0]?.version, 1);
+    assert.equal((await service.list(repositoryId))[0]?.activeVersion, 1);
+    await service.transition(repositoryId, id, "reject", actor);
+    assert.equal((await service.get(repositoryId, id))?.version, 1);
+    assert.equal((await service.list(repositoryId, "ACTIVE"))[0]?.version, 1);
+    const nextEdit = await service.edit(repositoryId, id, { content: "DTO fields use ordinary nullable values" }, actor);
+    assert.equal(nextEdit.version, 3);
+    assert.equal((await service.transition(repositoryId, id, "approve", actor)).status, "ACTIVE");
+    const versions = await database.pool.query("SELECT version,status FROM memories WHERE id=$1 ORDER BY version", [id]);
+    assert.deepEqual(versions.rows.map((row) => [row.version, row.status]), [[1, "SUPERSEDED"], [2, "REJECTED"], [3, "ACTIVE"]]);
+    const second = await database.insertCandidates({ ...job, prNumber: 9, headSha: "merged-2" }, [{ ...proposal, title: "New DTO rule", content: "Use plain nullable DTO fields", source: { pullRequestNumber: 9, commitSha: "merged-2", commentIds: [11] } }]);
+    await service.transition(repositoryId, second[0]!, "approve", actor);
+    await service.edit(repositoryId, second[0]!, { content:"Use ordinary nullable fields for public DTOs" }, actor);
+    const exception = await database.insertCandidates({ ...job, prNumber:10, headSha:"merged-3" }, [{ ...proposal, type:"exception", content:"Scoped exception", relation:{exceptionTo:id}, source:{pullRequestNumber:10,commitSha:"merged-3",commentIds:[12]} }]);
+    await assert.rejects(service.supersede(repositoryId,id,exception[0]!,actor),/例外必须保留原规则/);
+    assert.equal((await service.get(repositoryId,id))?.status,"ACTIVE");
+    assert.equal((await service.supersede(repositoryId, id, second[0]!, actor)).status, "ACTIVE");
+    assert.equal((await database.pool.query("SELECT count(*)::int count FROM memories WHERE id=$1 AND status='ACTIVE'",[second[0]])).rows[0].count,1);
+    assert.equal((await service.get(repositoryId, id))?.status, "SUPERSEDED");
+    assert.equal((await service.transition(repositoryId, second[0]!, "deprecate", actor)).status, "DEPRECATED");
+    assert.equal((await service.retrieve(repositoryId,{paths:["backend/a/dto/X.java"],text:"DTO"})).length,0);
+  } finally {
+    await database.pool.query("DELETE FROM memory_audits WHERE memory_id IN (SELECT id FROM memories WHERE repository_id=$1)", [repositoryId]);
+    await database.pool.query("DELETE FROM memories WHERE repository_id=$1", [repositoryId]);
+    await database.pool.query("DELETE FROM repositories WHERE id=$1", [repositoryId]);
+    await database.close();
+  }
+});

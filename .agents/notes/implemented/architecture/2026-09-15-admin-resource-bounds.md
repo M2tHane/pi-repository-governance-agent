@@ -8,7 +8,7 @@ OAuth 登录放弃后，过期 state 和不再访问的 session 留在内存。�
 
 ## Decision
 
-[管理 API](../../../../src/admin.ts) 使用有界 ExpiringStore：state 保留 10 分钟，session 保留 8 小时，各最多 1000 条。每条记录的 unref 定时器在到期后删除引用；读取也检查截止时间。容量满时拒绝新登录并返回 503，不踢出有效会话。有效 callback 消耗一次 state；退出清理对应 session 及定时器。
+[管理 API](../../../../src/admin/handler.ts) 使用有界 [ExpiringStore](../../../../src/admin/session-store.ts)：state 保留 10 分钟，session 保留 8 小时，各最多 1000 条。每条记录的 unref 定时器在到期后删除引用；读取也检查截止时间。容量满时拒绝新登录并返回 503，不踢出有效会话。有效 callback 消耗一次 state；退出清理对应 session 及定时器。
 
 `GET /api/bootstrap` 一次获取可访问仓库，再读取这些仓库的 Job 与 Memory。一次请求最多并发 4 项 GitHub 权限检查；下一次请求重新授权，不跨请求缓存权限。原独立端点保留，写操作继续执行独立授权和 CSRF 校验。
 
