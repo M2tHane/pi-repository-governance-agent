@@ -24,7 +24,9 @@ npm start
 
 表结构已就绪后，正常启动只需 `npm start`，服务不会自动执行迁移。以后新增数据库结构变更时，再手动运行 `npm run migrate`，成功后启动服务。
 
-`npm run migrate` 会先构建，`npm start` 只运行已有 `dist/`。开发时可使用 `npm run dev`：启动前构建一次，再监听编译产物；修改 `src/` 或 `admin/` 后需另行执行 `npm run build` 并刷新页面。数据库配置与默认本地端口见 [compose.yaml](compose.yaml)。正常服务只有一个 PostgreSQL Worker。
+`migrations/001_baseline.sql` 用于全新数据库初始化。若数据库已经记录旧版 `001_m1.sql` 至 `008_review_experience.sql` 的迁移，不能直接在该库执行当前 baseline；保留数据的环境需要先制定独立的迁移记录转换方案。
+
+`npm run migrate` 会先构建，`npm start` 只运行已有 `dist/`。开发时可使用 `npm run dev`：启动前构建一次，再监听编译产物；修改 `src/` 或 `frontend/` 后需另行执行 `npm run build` 并刷新页面。数据库配置与默认本地端口见 [compose.yaml](compose.yaml)。正常服务只有一个 PostgreSQL Worker。
 
 ## 配置
 
@@ -97,7 +99,7 @@ npm audit --audit-level=high
 
 ```sh
 npm run build
-node --env-file=.env scripts/evaluate-m2.mjs /absolute/path/to/fixed-checkout
+node --env-file=.env eval/evaluate-m2.mjs /absolute/path/to/fixed-checkout
 ```
 
 结果写入被忽略的 `work/m2-evaluation.json`。该命令只调用模型，不运行样本代码、不发布 GitHub Review；Memory 场景是合成数据。Main 改动后可加 `--selective-only` 复用相同 SHA 和预算下已保存的 single baseline。
@@ -105,7 +107,7 @@ node --env-file=.env scripts/evaluate-m2.mjs /absolute/path/to/fixed-checkout
 订单根因聚合与真实规则引用使用完整演示保留的 `work/e2e-order-api`、`work/e2e-order-followup` checkout（固定 SHA 写在脚本中）：
 
 ```sh
-node --env-file=.env scripts/evaluate-ux.mjs
+node --env-file=.env eval/evaluate-ux.mjs
 ```
 
 结果保存到 `work/ux-model-evaluation.json`。可附 `orders-single`、`orders-main` 或 `rule-reference` 单独运行，结果按样本另存。它只读取数据库中的规则并调用模型；Main 样本显式调用编排，partial 状态原样记录。

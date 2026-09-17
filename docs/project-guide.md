@@ -183,7 +183,7 @@ Review、Reply、Extraction、Health 是不同类型的 Job，不会要求每个
 | 事务 | 一组变更一起成功或一起回滚 | 数据库结构升级、规则状态切换等 |
 | 索引 | 帮助快速查找的目录 | 按任务状态领取任务、按仓库查询记录 |
 | JSONB | PostgreSQL 中可存结构化 JSON 的字段 | 规则 scope、报告、模型结果与用量明细 |
-| migration | 逐步升级数据库结构的脚本 | `migrations/001_m1.sql` 等编号文件 |
+| migration | 逐步升级数据库结构的脚本 | `migrations/001_baseline.sql` 及后续编号文件 |
 
 JSONB 不是另一种数据库，也不意味着数据无需校验。模型输出进入数据库前仍需经过服务校验。
 
@@ -208,7 +208,7 @@ JSONB 不是另一种数据库，也不意味着数据无需校验。模型输�
 
 ### 通用 Session 调用链
 
-主要入口为 [review.ts](../src/review.ts)。Review、Reply、Health 使用通用会话封装；Decision Extractor 有单独的创建路径，不能假定两者所有保护完全一致。
+主要入口为 [review.processor.ts](../src/review/review.processor.ts)。Review、Reply、Health 使用通用会话封装；Decision Extractor 有单独的创建路径，不能假定两者所有保护完全一致。
 
 通用路径按以下顺序工作：
 
@@ -280,7 +280,7 @@ try {
 
 ## 7. 多 Agent 是怎么协作的？
 
-当审查方式为 `auto`（自动）且复杂度达到条件时，使用 Main 协调。复杂度信号包括文件数、变更行数、Java 变更、涉及安全边界、多模块和可能的规则冲突；当前阈值包括至少 4 个文件或估算至少 120 行变更等，完整判断见 [orchestration.ts](../src/orchestration.ts)。
+当审查方式为 `auto`（自动）且复杂度达到条件时，使用 Main 协调。复杂度信号包括文件数、变更行数、Java 变更、涉及安全边界、多模块和可能的规则冲突；当前阈值包括至少 4 个文件或估算至少 120 行变更等，完整判断见 [orchestration.ts](../src/review/orchestration.ts)。
 
 Main 根据任务事实和允许角色调用 `delegate_agent`。服务检查角色、范围、规则引用、深度与剩余预算，再创建独立 child Session（子会话）。
 
@@ -532,10 +532,10 @@ App installation token 用来代表服务访问 GitHub；OAuth 用来识别管�
 | 想了解什么 | 入口 |
 | --- | --- |
 | 服务怎样启动、连接各处理器 | [src/main.ts](../src/main.ts) |
-| 数据如何持久化与恢复 | [src/database.ts](../src/database.ts)、[数据库迁移目录](../migrations/) |
-| Pi Session、工具和审查 | [src/review.ts](../src/review.ts) |
-| 复杂度和专项协作 | [src/orchestration.ts](../src/orchestration.ts) |
-| 团队规则的检索与生命周期 | [src/memory.ts](../src/memory.ts)、[Memory 设计](memory-design.md) |
+| 数据如何持久化与恢复 | [src/persistence/database.ts](../src/persistence/database.ts)、[数据库迁移目录](../migrations/) |
+| Pi Session、工具和审查 | [src/review/review.processor.ts](../src/review/review.processor.ts) |
+| 复杂度和专项协作 | [src/review/orchestration.ts](../src/review/orchestration.ts) |
+| 团队规则的检索与生命周期 | [src/memory/memory.service.ts](../src/memory/memory.service.ts)、[Memory 设计](memory-design.md) |
 | Agent、工具和结构化输出整体设计 | [架构说明](architecture.md) |
 | GitHub 接入、发布与回复 | [GitHub 集成](github-integration.md) |
 | 幂等、恢复、权限与预算 | [可靠性与安全](reliability-security.md) |

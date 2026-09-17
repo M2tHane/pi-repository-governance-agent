@@ -42,7 +42,7 @@ M3 的产品范围见 [PRD-MVP 的 F06](docs/PRD-MVP.md#f06仓库健康检查与
 
 如果仓库根目录已经存在 `.codegraph/`，先用 `codegraph explore` 或 `codegraph_explore` 理解符号与调用路径，再用 `rg` 补充未展示的源码。索引可能未覆盖未提交的新文件，检索缺失不等于代码不存在。没有索引则直接使用 `rg`，不自行建立索引。
 
-常用入口：`src/app.ts` 接收事件，`src/main.ts` 组装服务，`src/runner.ts` 领取任务，`src/service.ts` 发布 Review，`src/presentation.ts` 聚合与短评展示，`src/admin.ts` 和 `admin/app.tsx` 提供管理 API 与界面。数据库变更使用 `migrations/` 中的增量迁移；不要改写已执行迁移。
+常用入口：`src/github/webhook/handler.ts` 接收事件，`src/bootstrap/application.ts` 组装服务，`src/jobs/runner.ts` 领取任务，`src/review/review.publisher.ts` 发布 Review，`src/review/presentation.ts` 聚合与短评展示，`src/admin/handler.ts` 和 `frontend/app.tsx` 提供管理 API 与界面。全新数据库使用 `migrations/001_baseline.sql`；后续使用增量迁移，不要在已有旧迁移记录的数据库直接执行 baseline。
 
 项目说明和 Notes 默认使用中文；代码标识、类型、工具名、事件和协议字段保留英文。
 

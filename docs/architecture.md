@@ -248,7 +248,7 @@ Main 不重复完整审查，最终返回 summary 与候选 key 分组。服务�
 
 `HEALTH_AUDIT` 是仓库级 Job，`pr_number`、`base_sha`、`delivery_id` 均为空，不进入 Review publication 或 Reply 状态机。服务在创建任务时固定默认分支 SHA、30 天窗口和路径／语言／预算配置；重试保持这些值。
 
-报告结构见 [HealthReport 类型](../src/types.ts)，执行与校验入口见 [health.ts](../src/health.ts)。报告包含 Job／仓库／SHA、窗口、采集／完成时间、实际 Scope、模型／usage／耗时、各维度 findings、实际读取行数、提供的 Memory 版本、CI 来源、missingData、limitations 和可比性指纹。
+报告结构见 [HealthReport 类型](../src/health/types.ts)，执行与校验入口见 [health.processor.ts](../src/health/health.processor.ts)。报告包含 Job／仓库／SHA、窗口、采集／完成时间、实际 Scope、模型／usage／耗时、各维度 findings、实际读取行数、提供的 Memory 版本、CI 来源、missingData、limitations 和可比性指纹。
 
 模型只输出 summary、findings 与 limitations。finding 的身份、报告归属、覆盖统计、来源链接与状态由服务生成。代码引用必须指向工具实际返回过的行，CI 与 Memory 引用必须属于本次输入。没有有效结构化结果时失败；数据或覆盖不完整时保存 partial。报告与 Job 终态在同一事务提交，重复保存以首次报告为准。
 

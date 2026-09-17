@@ -14,7 +14,7 @@ OAuth 登录放弃后，过期 state 和不再访问的 session 留在内存。�
 
 `GET /api/findings` 返回 `{ items, nextCursor }`。默认每页 50 条，limit 为 1～50，支持 repositoryId 和 jobId。排序键为讨论创建时间、finding ID、回复 comment ID，全部降序；时间游标保留 PostgreSQL 微秒，comment ID 保留十进制字符串。游标包含筛选条件并使用服务会话密钥签名，每页仍重新授权。无权仓库返回空列表；无效、被修改或筛选不一致的游标返回 422。
 
-[管理界面](../../../../admin/app.tsx) 按用户操作加载下一页，显示已加载数量，提供重试、刷新及仓库筛选；切换筛选或离开页面时取消旧请求。审查详情用单独的 `finding_statuses` 显示当前状态，不依赖讨论是否已经翻到对应页。没有完整报告的历史审查只声明已加载的问题数量。
+[管理界面](../../../../frontend/app.tsx) 按用户操作加载下一页，显示已加载数量，提供重试、刷新及仓库筛选；切换筛选或离开页面时取消旧请求。审查详情用单独的 `finding_statuses` 显示当前状态，不依赖讨论是否已经翻到对应页。没有完整报告的历史审查只声明已加载的问题数量。
 
 ## Alternatives considered
 
