@@ -1,117 +1,412 @@
-# Pi Repository Governance Agent
+# GitHub PR Review Agent
 
-帮助团队 Review PR，并记住已经确认的工程决定。开发者在 PR 里查看简短问题与建议，维护者在管理页确认团队规则。底层使用 TypeScript、GitHub App、固定提交的只读 Workspace 与 Pi。
+基于 **Pi + GitHub App** 的团队级 PR Review 与工程治理 Agent。
 
-第一次了解项目，先读 [项目理解指南](docs/project-guide.md)：用具体 PR 解释整体流程、数据库各表、Pi 调用与扩展，并提供主要枚举值的中文对照。
+它不只是在 PR 中生成一次性的 AI Review，而是把 **PR 审查、讨论复核、团队规则沉淀、后续规则复用** 串成一个持续闭环：
 
-服务支持 inline finding、线程复核、按需多 Agent、共享预算，以及 M3 的仓库健康检查与历史报告。本轮体验收口与验证见 [UX 清单](docs/tasks/UX.md)，健康检查实现记录见 [M3 清单](docs/tasks/M3.md)；M2 的独立人工验收状态见 [M2 清单](docs/tasks/M2.md)。
+```text
+Pull Request
+    ↓
+AI Review
+    ├─ Single Agent
+    └─ Main Agent + Specialist
+    ↓
+Inline Findings / Summary
+    ↓
+Developer Reply
+    ↓
+Reply Re-evaluation
+    ↓
+PR Merged
+    ↓
+Decision Extraction
+    ↓
+CANDIDATE Team Memory
+    ↓
+Maintainer Confirm
+    ↓
+ACTIVE Team Memory
+    ↓
+Future PR Review
+```
 
-## 启动
+项目同时提供仓库级 **Health Audit**，用于在不修改源码、不执行仓库脚本的前提下，对代码库进行只读健康检查。
 
-需要 Node.js 24+、Git、Docker / PostgreSQL。
+## 核心能力
 
-```sh
+### 1. Multi-Agent PR Review
+
+根据 PR 复杂度选择不同审查路径：
+
+- 简单 PR：Single Agent 直接完成 Review。
+- 复杂 PR：Main Agent 按需委派 Specialist，并聚合结果。
+- 支持专项审查角色，例如 General、Java、Security、Architecture、Memory Conflict。
+- 固定 PR Head SHA 创建只读 Workspace，避免分析过程中代码漂移。
+- Structured Output 约束模型结果，并在发布前进行结构、路径和状态校验。
+- 使用共享 Token Budget 控制 Main 与 Specialist 的总消耗。
+- 支持并发委派、Partial Fallback、Finding 去重与同根因聚合。
+- 可定位问题发布为 GitHub Inline Review；无法可靠定位的问题降级到 Summary。
+
+### 2. Team Memory
+
+将 PR 中明确确认的工程决策沉淀为后续 Review 可复用的团队规则：
+
+```text
+PR Merge
+  → Decision Extraction
+  → CANDIDATE
+  → Maintainer Confirm
+  → ACTIVE
+  → Future Review Recall
+```
+
+Memory 具备以下约束：
+
+- Repository Isolation：规则只在所属仓库内生效。
+- Scope Filter：根据路径、语言、模块和适用条件过滤规则。
+- Version / Source Validation：校验规则版本及来源。
+- Human-in-the-loop：AI 只能提出候选规则，ACTIVE 规则必须由维护者确认。
+- 支持 supersede / deprecate 等规则生命周期管理。
+
+### 3. Reply Handler
+
+开发者回复 Agent 的 Inline Finding 后，系统会重新读取当前 PR Head 与讨论上下文，对原问题进行二次判断。
+
+当前状态包括：
+
+- `FIXED`：问题已经修复。
+- `MISJUDGMENT`：原 Review 判断错误。
+- `VALID_EXCEPTION`：存在合理例外。
+- `STILL_VALID`：问题仍然成立。
+- `NEEDS_CLARIFICATION`：需要进一步说明。
+
+### 4. 可靠性与安全治理
+
+系统使用 PostgreSQL 持久化任务、幂等状态和 Review 结果，并对 GitHub 与模型调用做显式失败处理：
+
+- Webhook Delivery 幂等。
+- PostgreSQL 持久化 Job。
+- 异常重启后恢复未完成任务。
+- 指数退避与有限次数重试。
+- Publication Fingerprint 防止重复发布。
+- GitHub 发布结果不确定时进入 `uncertain`，先核对远端状态，而不是直接重发。
+- 新 Head、Draft、关闭 PR、仓库暂停等情况会取消过期 Review。
+- Main、Specialist 和 Reply Agent 均不获得 shell、写文件、GitHub 写操作或 Memory Mutation 权限。
+
+### 5. Repository Health Audit
+
+Health Agent 对仓库进行独立的只读检查：
+
+- 固定默认分支 SHA 与检查窗口。
+- 不运行仓库脚本。
+- 不修改源码。
+- 不发布 GitHub Review。
+- 不修改 Team Memory。
+- 支持手动执行以及每日 / 每周定时执行。
+- 历史报告保存在管理界面中。
+
+## 系统架构
+
+```text
+GitHub
+  │
+  │ Webhook / Pull Request / Review Comment
+  ▼
+GitHub App
+  │
+  ▼
+HTTP API
+  │
+  ├───────────────┐
+  ▼               ▼
+PostgreSQL     Admin UI
+  │
+  ▼
+Persistent Worker
+  │
+  ├─ PR_REVIEW
+  ├─ REPLY_HANDLE
+  ├─ DECISION_EXTRACT
+  └─ HEALTH_AUDIT
+  │
+  ▼
+Pi Agent Runtime
+  │
+  ├─ Main Agent
+  ├─ Specialist
+  ├─ Reply Agent
+  ├─ Decision Extractor
+  └─ Health Agent
+  │
+  ▼
+GitHub Review / Team Memory / Health Report
+```
+
+主要技术栈：
+
+- TypeScript / Node.js 24+
+- Pi Coding Agent
+- GitHub App / Webhook / OAuth
+- PostgreSQL
+- React
+- Docker Compose
+
+## Quick Start
+
+### 1. 安装依赖
+
+```bash
 npm ci
+```
+
+### 2. 启动 PostgreSQL
+
+```bash
 npm run db:up
 ```
 
-复制 [.env.example](.env.example) 为 `.env` 并填写 GitHub App、数据库、模型和 OAuth 配置。首次初始化数据库时执行：
+### 3. 配置环境变量
 
-```sh
+```bash
+cp .env.example .env
+```
+
+至少需要配置：
+
+```text
+GITHUB_APP_ID
+GITHUB_PRIVATE_KEY_PATH
+GITHUB_WEBHOOK_SECRET
+GITHUB_ALLOWED_REPOSITORIES
+DATABASE_URL
+MODEL_PROVIDER
+MODEL_NAME
+MODEL_API_KEY
+GITHUB_CLIENT_ID
+GITHUB_CLIENT_SECRET
+GITHUB_OAUTH_CALLBACK_URL
+SESSION_SECRET
+```
+
+完整配置说明见 [.env.example](.env.example)。
+
+### 4. 初始化数据库
+
+首次运行：
+
+```bash
 npm run migrate
+```
+
+`migrations/001_baseline.sql` 用于全新数据库初始化。已有旧版迁移记录的数据库不要直接套用 baseline，需要单独制定迁移转换方案。
+
+### 5. 启动服务
+
+生产式启动：
+
+```bash
+npm run build
 npm start
 ```
 
-表结构已就绪后，正常启动只需 `npm start`，服务不会自动执行迁移。以后新增数据库结构变更时，再手动运行 `npm run migrate`，成功后启动服务。
+开发模式：
 
-`migrations/001_baseline.sql` 用于全新数据库初始化。若数据库已经记录旧版 `001_m1.sql` 至 `008_review_experience.sql` 的迁移，不能直接在该库执行当前 baseline；保留数据的环境需要先制定独立的迁移记录转换方案。
+```bash
+npm run dev
+```
 
-`npm run migrate` 会先构建，`npm start` 只运行已有 `dist/`。开发时可使用 `npm run dev`：启动前构建一次，再监听编译产物；修改 `src/` 或 `frontend/` 后需另行执行 `npm run build` 并刷新页面。数据库配置与默认本地端口见 [compose.yaml](compose.yaml)。正常服务只有一个 PostgreSQL Worker。
+> `npm start` 不会自动执行数据库迁移。数据库结构发生变化时，应先显式运行 `npm run migrate`。
 
-## 配置
+## GitHub App 配置
 
-| 变量 | 用途 |
-| --- | --- |
-| GITHUB_APP_ID / GITHUB_PRIVATE_KEY_PATH | App 身份与可读的本地私钥路径 |
-| GITHUB_WEBHOOK_SECRET | 原始请求体 HMAC 验签 |
-| GITHUB_ALLOWED_REPOSITORIES | 授权的 owner/repo，逗号分隔 |
-| DATABASE_URL | PostgreSQL 连接 |
-| MODEL_PROVIDER / MODEL_NAME / MODEL_API_KEY | Pi 模型；本项目真实验证使用 deepseek/deepseek-v4-flash |
-| GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET | 管理界面的 GitHub OAuth |
-| GITHUB_OAUTH_CALLBACK_URL | 与 App 设置一致的 /auth/github/callback 地址 |
-| SESSION_SECRET | 至少 32 字符的本地会话签名 secret |
-| PORT / WEBHOOK_MAX_BYTES | HTTP 端口与 Webhook 请求大小上限 |
-| AGENT_TIMEOUT_MS | Review / 会话时间上限，默认 300000 ms；Health 取该值与 120000 ms 中的较小值 |
-| QUEUE_CAPACITY | 保留用于 M0 内存队列；当前 PostgreSQL Worker 不使用此参数 |
-| NODE_USE_ENV_PROXY / HTTPS_PROXY / NO_PROXY | 可选：让 Node 使用本机已有代理，保持 TLS 校验 |
+建议权限：
 
-OAuth state 有效期 10 分钟，登录会话有效期 8 小时，到期自动回收；两类记录各最多 1000 条，满额时新登录返回 503，请稍后重试。
+- Metadata: Read
+- Contents: Read
+- Pull requests: Read & Write
 
-管理页主导航为概览、团队规则和仓库；仓库页设置启停，设置 → 审查策略管理路径范围、输出语言、任务预算、审查方式和专项上限。预算不足会明确失败或 partial，不能按 child 数量扩大额度。固定复杂样本的评测配置和实际用量记录在 M2 清单中。
+订阅事件：
 
-设置 → 审查讨论支持仓库筛选，每次最多加载 50 条，可继续加载、重试或刷新。管理页首次加载通过聚合 API 复用本次仓库授权，每次新请求仍重新检查权限。
+- Pull requests
+- Pull request review comments
 
-设置 → 仓库健康检查使用同一仓库的路径范围、语言和预算。点击“运行健康检查”后，服务固定默认分支 SHA 和最近 30 天窗口；同仓库已有活动健康任务时返回原任务。定时默认关闭，可在健康检查页设置每日／每周，并查看下次 UTC 执行时间。
+Webhook：
 
-macOS 若对私钥路径返回 EPERM，应授权对应目录访问或将已有私钥放到可读的本地私密位置。浏览器能访问 GitHub 而 Node OAuth 请求失败时，检查系统代理与 Node 环境是否一致。
+```text
+https://<your-domain>/github/webhook
+```
 
-## GitHub App
+GitHub App 安装范围应与 `GITHUB_ALLOWED_REPOSITORIES` 保持一致。
 
-1. 权限：Metadata Read、Contents Read、Pull requests Read & Write。
-2. 订阅 Pull requests 和 Pull request review comments。
-3. Webhook URL：`https://<公开地址>/github/webhook`，secret 与本地配置一致。
-4. App 安装范围和 GITHUB_ALLOWED_REPOSITORIES 保持一致。
-5. OAuth callback 与公开服务地址保持一致。
+管理界面使用 GitHub OAuth，并通过 OAuth 权限与 CSRF 校验保护维护者操作。
 
-真实联调只在授权测试仓库进行。GitHub 发布使用短期 installation token；维护者管理操作使用 OAuth 与 CSRF 校验。
+## Review 工作流
 
-## 当前行为
+触发 PR Review 的事件：
 
-- opened / reopened / synchronize / ready_for_review：Review 固定 head；Draft、closed、暂停仓库和 fork 不进入新 Review。
-- 同根因候选合并为一个短评，保留关联位置和完整证据。可定位问题绑定 inline comment，不可靠的行号降级到 summary。
-- 人类回复本 App 的已绑定线程：重新读取当前 head，产生 FIXED、MISJUDGMENT、VALID_EXCEPTION、STILL_VALID 或 NEEDS_CLARIFICATION。
-- merged PR：Decision Extractor 只提出 CANDIDATE；ACTIVE / supersede / deprecate 仍需维护者操作。
-- 简单 PR 使用单 Agent；复杂 PR 由 Main 从允许角色中选择，最多两项同时运行，深度固定为一层。
-- Main、Specialist 与 Reply 都不获得 shell、写文件、GitHub 写工具或 Memory mutation。
-- 新 head、Draft、关闭、暂停和服务停止会取消活动审查；发布前再次检查当前状态和 SHA。
-- Health 使用独立只读 Agent，报告保存在管理页；不发布 GitHub 评论、不运行仓库脚本、不修改源码或 Memory。
-- Health 定时与手动触发共享去重，异常重启最多补一个到期检查；领取时 PR / Reply / Decision 优先，不抢占已经运行的 Health。
-- App 被删除、暂停或移除已登记仓库时，验签后的事件会停用对应仓库并取消相关审查。重新接入后由维护者明确恢复启用。
+```text
+opened
+reopened
+synchronize
+ready_for_review
+```
 
-PostgreSQL 保存任务与幂等记录，异常重启后恢复 running Job。发布响应不确定时进入 uncertain，先核对远端再恢复。成功 Review 的线程绑定失败会单独标记，不重发整份 Review。当前不提供多 Worker 或 exactly-once 保证。
+不会进入正常新 Review 的情况包括：
 
-Health 的单次清单上限是 200 个文本文件、每文件 64 KiB、合计 2 MiB；每次文件工具最多返回 200 行／16000 字符。CI 只读取已有权限可见的元数据，最多保存 50 项来源。没有权限、没有记录、截断或未读完整时明确展示覆盖限制，零意见不代表健康保证。重试保持原 SHA／窗口，并扣除本任务此前实际和未知消耗；有报告的任务不会重复调用模型。
+- Draft PR
+- Closed PR
+- 暂停仓库
+- 不受支持的 Fork
+- 未授权仓库
 
-## 检查与固定模型对照
+完整流程：
 
-```sh
+```text
+Webhook
+  ↓
+Signature / Repository / Delivery Validation
+  ↓
+Persistent Job
+  ↓
+Pin Base SHA + Head SHA
+  ↓
+Load Diff / Workspace / Team Memory
+  ↓
+Complexity Routing
+  ├─ Single Agent
+  └─ Main + Specialist
+  ↓
+Validate Structured Output
+  ↓
+Deduplicate Findings
+  ↓
+Re-check PR State + Head SHA
+  ↓
+Publish GitHub Review
+```
+
+## Team Memory 工作流
+
+只有合并后的 PR 才会进入 Decision Extraction：
+
+```text
+Merged PR
+  ↓
+Read Diff + Review + Human Discussion
+  ↓
+Extract Reusable Engineering Decision
+  ↓
+Validate Repository / SHA / Source / Code Evidence
+  ↓
+CANDIDATE
+  ↓
+Maintainer Review
+  ├─ Confirm → ACTIVE
+  ├─ Edit → New Candidate Version
+  ├─ Supersede
+  └─ Deprecate
+```
+
+系统不会把“代码碰巧这样写”直接提升为团队规则，也不会自动把 AI 自己的意见写入 ACTIVE Memory。
+
+## 测试与验证
+
+运行基础测试：
+
+```bash
 npm test
+```
+
+数据库测试：
+
+```bash
 npm run test:db
+```
+
+文档链接检查：
+
+```bash
 npm run check:docs
+```
+
+依赖审计：
+
+```bash
 npm audit --audit-level=high
 ```
 
-`npm test` 包含构建、Node 内置测试、真实 Pi Session 配合 Provider 替身和本地 Git 样本。`test:db` 从环境或 `.env` 读取 `DATABASE_URL`，在临时 schema 运行并回收，不接触真实任务队列；缺少连接配置会跳过数据库用例，不能据退出码认定验证通过。两个测试命令都会构建，请顺序执行。
+### 固定 Review Evaluation
 
-`check:docs` 检查根目录 Markdown、`docs/`、`.agents/decisions/` 的本地文件链接与标题锚点。它遵守 Git 忽略规则，也检查未跟踪的新文档；代码示例、外部 URL 不作本地链接检查。外部链接可用性与文档语义仍需人工复核。文档与优化检查记录见 [UX 清单](docs/tasks/UX.md#2026-09-15文档同步与项目优化检查)。
+固定样本使用测试仓库指定 SHA：
 
-固定对照使用测试仓库提交 `ad75aa1e1f1a3604682af068c2c048da23bbbe7a` 的干净 checkout：
+```text
+ad75aa1e1f1a3604682af068c2c048da23bbbe7a
+```
 
-```sh
+运行：
+
+```bash
 npm run build
 node --env-file=.env eval/evaluate-m2.mjs /absolute/path/to/fixed-checkout
 ```
 
-结果写入被忽略的 `work/m2-evaluation.json`。该命令只调用模型，不运行样本代码、不发布 GitHub Review；Memory 场景是合成数据。Main 改动后可加 `--selective-only` 复用相同 SHA 和预算下已保存的 single baseline。
+结果写入：
 
-订单根因聚合与真实规则引用使用完整演示保留的 `work/e2e-order-api`、`work/e2e-order-followup` checkout（固定 SHA 写在脚本中）：
+```text
+work/m2-evaluation.json
+```
 
-```sh
+UX / Root Cause / Rule Reference Evaluation：
+
+```bash
 node --env-file=.env eval/evaluate-ux.mjs
 ```
 
-结果保存到 `work/ux-model-evaluation.json`。可附 `orders-single`、`orders-main` 或 `rule-reference` 单独运行，结果按样本另存。它只读取数据库中的规则并调用模型；Main 样本显式调用编排，partial 状态原样记录。
+## 项目结构
 
-产品范围见 [PRD-MVP](docs/PRD-MVP.md)，实现分层见 [architecture](docs/architecture.md)，安全与恢复见 [reliability-security](docs/reliability-security.md)。
+```text
+.
+├── frontend/          # 管理界面
+├── src/               # 后端与 Agent Runtime
+├── migrations/        # PostgreSQL Migration
+├── eval/              # Agent Evaluation
+├── test/              # 自动化测试
+├── scripts/           # 构建与辅助脚本
+├── docs/              # 产品、架构与设计文档
+├── .agents/           # Agent 决策与工程上下文
+├── compose.yaml
+├── package.json
+└── README.md
+```
 
-完整运行机制和中文枚举见 [项目理解指南](docs/project-guide.md)，流程图提供 [draw.io 源文件](docs/diagrams/pr-review-memory-flow.drawio) 与 [PNG 预览](docs/diagrams/pr-review-memory-flow.png)。
+## 文档
+
+如果第一次阅读项目，建议按以下顺序：
+
+1. [项目理解指南](docs/project-guide.md) — 从实际 PR 出发理解完整运行流程、数据库、Pi Agent 与核心状态。
+2. [PRD](docs/PRD-MVP.md) — 产品目标与范围。
+3. [Architecture](docs/architecture.md) — 系统模块与实现分层。
+4. [Reliability & Security](docs/reliability-security.md) — 可靠性、安全边界和失败恢复。
+5. [PR Review / Team Memory 流程图](docs/diagrams/pr-review-memory-flow.png) — 图形化查看主要闭环。
+
+可编辑流程图：[`docs/diagrams/pr-review-memory-flow.drawio`](docs/diagrams/pr-review-memory-flow.drawio)
+
+## 当前边界
+
+当前实现刻意保持以下约束：
+
+- 单 PostgreSQL Worker，不提供多 Worker 调度保证。
+- 不承诺 exactly-once；通过幂等、状态机和远端核对降低重复副作用。
+- Team Memory 不是全仓库自动学习系统，ACTIVE 规则必须经过人工确认。
+- Health Audit 是有限范围的只读检查，不代表完整代码安全证明。
+- Review 质量受模型、Token Budget、Workspace 覆盖范围和规则召回结果影响。
+
+## 项目目标
+
+这个项目关注的不是“让 LLM 多写几条 Review 评论”，而是构建一个可持续运行的团队级代码治理闭环：
+
+```text
+Review → Discussion → Decision → Memory → Future Review
+```
+
+让一次 PR 中已经确认的工程经验，不再随着 PR 合并而消失。
